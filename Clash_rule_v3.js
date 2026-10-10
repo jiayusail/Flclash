@@ -1,4 +1,4 @@
-// Clash_rule.js V5.4 (+自定义域名 / 节点统一命名 / DNS 覆写并入 / IPv6 优先双栈)
+// Clash_rule.js V5.4 (+自定义域名 / 节点统一命名 / DNS 覆写并入 / IPv6 优先双栈 / 无地区节点图标)
 // 需较新的 mihomo 内核；首次启动联网下载规则集，在日志确认全部下载成功。
 // 使用本脚本后，请关闭 FlClash 里的"DNS 覆写"，DNS 配置已全部写进脚本。
 
@@ -36,6 +36,7 @@ const TRUST_SUB_NAMESERVER = false;
 
 // ── 节点命名 ──
 // true：本地节点统一命名为"国旗 简称 原名"，如 🇭🇰 HK 联通优选；已有国旗/简称的保留并去重
+// 没有任何地区信息的节点（如"三网优选"）会在名称前加一个图标
 const RENAME_NODES = true;
 
 // ── 自定义域名（个人维护区，脚本升级后只需把这两行抄回去） ──
@@ -424,6 +425,23 @@ function main(params) {
         return rest ? flag + " " + code + " " + rest : flag + " " + code;
     };
 
+    // ── 无地区信息节点：名称前加图标 ──
+    const NO_REGION_ICONS = ["🔀", "🌐", "🔗", "📡", "🛜", "✅", "🌀", "🔰"];
+
+    const hasNoRegionIcon = name =>
+        NO_REGION_ICONS.some(icon => name.startsWith(icon + " "));
+
+    // 按节点名哈希"随机"取图标：每个节点图标不同，同名节点每次刷新结果一致
+    const pickNoRegionIcon = name => {
+        let h = 0;
+
+        for (let i = 0; i < name.length; i++) {
+            h = (h * 31 + name.charCodeAt(i)) >>> 0;
+        }
+
+        return NO_REGION_ICONS[h % NO_REGION_ICONS.length];
+    };
+
     const proxyRegion = new Map();   // 节点对象 → 地区代码（仅本地节点）
     const renamedFrom = new Map();   // 旧名 → 新名，用于修补 dialer-proxy 引用
 
@@ -439,7 +457,23 @@ function main(params) {
 
             const code = detectRegion(proxy.name);
 
-            if (!code) return;
+            if (!code) {
+                // 带有表中没有的国旗：尊重原标注，不加图标
+                if (flagCodesIn(proxy.name).length > 0) return;
+
+                // 已经加过图标：不重复加
+                if (hasNoRegionIcon(proxy.name)) return;
+
+                const iconName =
+                    pickNoRegionIcon(proxy.name) + " " + proxy.name;
+
+                if (!renamedFrom.has(proxy.name)) {
+                    renamedFrom.set(proxy.name, iconName);
+                }
+
+                proxy.name = iconName;
+                return;
+            }
 
             const newName = formatNodeName(proxy.name, code);
 
@@ -1319,8 +1353,8 @@ function main(params) {
             // provider 订阅下可能一个节点都匹配不上，用 REJECT 兜底而不是留空组
             "empty-fallback": "REJECT",
             url: TEST_URL_PROXY,
-            interval: 300,
-            tolerance: 30,
+            interval: 600,
+            tolerance: 50,
             lazy: true,
             timeout: 5000,
             "max-failed-times": 5,

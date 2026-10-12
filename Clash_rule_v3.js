@@ -1,6 +1,7 @@
-// Clash_rule.js V5.4 (+自定义域名 / 节点统一命名 / DNS 覆写并入 / IPv6 优先双栈 / 无地区节点图标)
+// Clash_rule.js V5.5 (+屏蔽 STUN / BT 直连 / 固定节点域名 DNS / 节点名括号保护 / 默认关闭 IPv6 与屏蔽 QUIC)
 // 需较新的 mihomo 内核；首次启动联网下载规则集，在日志确认全部下载成功。
 // 使用本脚本后，请关闭 FlClash 里的"DNS 覆写"，DNS 配置已全部写进脚本。
+// 屏蔽 QUIC / 屏蔽 STUN / BT 直连 已写进本脚本，请勿再在 FlClash"附加规则"里重复开启。
 
 // ── 可调参数（集中维护） ──
 const REGION_MIN_NODES = 2;        // 达到该值才建组；provider 订阅时节点不可见，不参与判断
@@ -21,11 +22,23 @@ const PROXY_SERVER_DNS = [
 ];
 const TEST_URL_PROXY = "https://www.gstatic.com/generate_204";
 const PREFER_H3 = false;          // DoH 并发尝试 HTTP/3：UDP 被限速或不支持时反而更慢
-const BLOCK_QUIC = false;         // 拒绝 UDP 443 迫使回退 TCP；仅节点不支持 UDP 时开（国内直连 QUIC 会一并回退）
+
+// ── 传输层 / 附加规则开关 ──
+// 拒绝 UDP 443 迫使浏览器立刻回退 TCP。节点（Workers/Pages）不支持 UDP 转发时建议开启，
+// 否则浏览器要先等 QUIC 超时再回退（国内直连站点的 QUIC 也会一并回退 TCP，基本无感）
+const BLOCK_QUIC = true;
+// 拒绝 STUN 常用 UDP 端口：节点不转发 UDP 时，WebRTC 的 STUN 探测只会绕过代理暴露真实 IP；
+// 代价是网页视频通话、在线会议等 WebRTC 功能可能受影响，需要时改为 false
+const BLOCK_STUN = true;
+// 拒绝 853 端口（DNS over TLS / DoQ）：安卓若开了"私人 DNS"（走 853）请保持 false，否则会解析失败
+const BLOCK_DOT = false;
+// BT tracker / PT 站点域名直连：避免占用节点额度。注意只能匹配域名，直接连 IP 的 BT 对等流量不受此规则影响
+const BT_DIRECT = true;
 
 // ── IPv6 / 双栈 ──
-// follow：跟随客户端里的 IPv6 开关（推荐）；on：强制开启；off：强制关闭
-const IPV6_MODE = "follow";
+// follow：跟随客户端里的 IPv6 开关；on：强制开启；off：强制关闭
+// 客户端已关闭 IPv6、节点又是 IPv4 优选 IP 时，保持 off 可让脚本与客户端设置一致
+const IPV6_MODE = "off";
 // 开启 IPv6 时节点用 ipv6-prefer：先用 IPv6，连不上自动回退 IPv4；关闭时用 dual 双栈
 const IP_VERSION_IPV6_ON = "ipv6-prefer";
 const IP_VERSION_IPV6_OFF = "dual";
@@ -33,6 +46,16 @@ const IP_VERSION_IPV6_OFF = "dual";
 // ── DNS 防泄漏 ──
 // false：海外域名一律走脚本里的海外 DoH（经代理出站），忽略订阅自带的 nameserver，避免订阅把查询带回国内 DNS
 const TRUST_SUB_NAMESERVER = false;
+
+// ── 固定节点基础设施域名（个人维护区） ──
+// ECH 配置查询域名 + 节点的 SNI / WS Host 域名：固定走国内 DoH，不依赖脚本能否看见节点。
+// 本地节点会自动收集这些域名；proxy-providers 订阅时节点不可见，必须靠这里写死，否则 ECH 配置查询会经代理出站，
+// 形成"要连节点才能查 ECH 配置"的循环。换了 EdgeTunnel 域名时只改这里
+const FIXED_NODE_DOMAINS = [
+    "cloudflare-ech.com",
+    "edge-2.jiayusail.de5.net",
+    "qifei.jiayusail.dynv6.net"
+];
 
 // ── 节点命名 ──
 // true：本地节点统一命名为"国旗 简称 原名"，如 🇭🇰 HK 联通优选；已有国旗/简称的保留并去重
@@ -412,15 +435,27 @@ function main(params) {
             "gi"
         );
 
-        // 去掉已有的同地区国旗与简称，避免重复；其余原名原样保留
-        const rest = name
+        // 括号内容（如 [wsrv.nl 188ms] 里的域名）先换成占位符、清理完再还原：
+        // 否则域名后缀 .nl / .us / .sg 会被当成地区简称误删（wsrv.nl → wsrv.）
+        const bracketParts = [];
+        const masked = name.replace(BRACKET_RE, part => {
+            bracketParts.push(part);
+            return "\uE000" + (bracketParts.length - 1) + "\uE001";
+        });
+
+        // 去掉括号外已有的同地区国旗与简称，避免重复；其余原名原样保留
+        const rest = masked
             .split(flag)
             .join(" ")
             .replace(tokenRe, "$1 ")
             .replace(/\s+/g, " ")
             .replace(/^[\s\-_|·•,，、:：/.]+/, "")
             .replace(/[\s\-_|·•]+$/, "")
-            .trim();
+            .trim()
+            .replace(
+                /\uE000(\d+)\uE001/g,
+                (_, index) => bracketParts[Number(index)]
+            );
 
         return rest ? flag + " " + code + " " + rest : flag + " " + code;
     };
@@ -884,6 +919,13 @@ function main(params) {
 
     const nodeDomainPolicy = {};
 
+    // 固定域名：不依赖脚本能否看见节点（provider 订阅同样生效）
+    FIXED_NODE_DOMAINS.forEach(value => {
+        if (isDomainName(value)) {
+            nodeDomainPolicy[value.toLowerCase()] = [...CN_DNS_DOH];
+        }
+    });
+
     params.proxies.forEach(proxy => {
         const ws = isPlainObject(proxy["ws-opts"]) ? proxy["ws-opts"] : {};
         const headers = isPlainObject(ws.headers) ? ws.headers : {};
@@ -1042,6 +1084,12 @@ function main(params) {
         "proxy-domain": "geolocation-!cn",
         "cn-domain": "cn"
     };
+
+    // BT：公共 tracker + PT 站点域名（仅 BT_DIRECT 开启时才建规则集并下载）
+    if (BT_DIRECT) {
+        DOMAIN_SETS["bt-tracker-domain"] = "category-public-tracker";
+        DOMAIN_SETS["bt-pt-domain"] = "category-pt";
+    }
 
     const IP_SETS = {
         "private-ip": "private",
@@ -1386,7 +1434,7 @@ function main(params) {
 
     // 规则自上而下先命中先决定，顺序即优先级，五层：
     //   1. 私网 / 广告（避免内网域名被后面的规则带去代理）
-    //   2. 传输层兜底（NTP、可选 QUIC 阻断；必须排在应用分流前，否则 UDP/443 被应用规则抢先）
+    //   2. 传输层兜底（NTP、QUIC / STUN / DoT 阻断、BT 直连；必须排在应用分流前，否则 UDP/443 被应用规则抢先）
     //   3. 自定义域名（个人维护，优先于所有规则集，用来纠正规则集的误判）
     //   4. 应用分流
     //   5. 国内直连 → MATCH 兜底
@@ -1400,6 +1448,19 @@ function main(params) {
         ...(BLOCK_QUIC
             ? [
                   "AND,((DST-PORT,443),(NETWORK,udp)),REJECT"
+              ]
+            : []),
+        // STUN：3478/3479 为标准端口，19302-19309 为 Google STUN；DST-PORT 用 "/" 分隔多值、"-" 表示区间
+        ...(BLOCK_STUN
+            ? [
+                  "AND,((NETWORK,UDP),(DST-PORT,3478/3479/19302-19309)),REJECT"
+              ]
+            : []),
+        ...(BLOCK_DOT ? ["DST-PORT,853,REJECT"] : []),
+        ...(BT_DIRECT
+            ? [
+                  "RULE-SET,bt-tracker-domain,DIRECT",
+                  "RULE-SET,bt-pt-domain,DIRECT"
               ]
             : []),
 

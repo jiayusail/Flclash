@@ -24,10 +24,7 @@ const CUSTOM_DIRECT = ["cn"];
 // 节点基础设施域名（ECH 配置查询域名、节点 SNI / WS Host 域名），固定走国内 DoH。
 // proxy-providers 订阅时脚本看不到节点，必须在这里写死，否则 ECH 查询会经代理出站形成循环
 const FIXED_NODE_DOMAINS = [
-    "cloudflare-ech.com",
-    "edge-2.jiayusail.de5.net",
-    "qifei.jiayusail.dynv6.net",
-    "xiaoshuo-877.pages.dev"   // CFNext 的 Pages 域名
+    "cloudflare-ech.com"
 ];
 
 // ════════════════════════════════════════

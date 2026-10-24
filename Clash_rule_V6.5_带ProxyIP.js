@@ -31,8 +31,6 @@ const PROXYIP_SKIP_HOSTS = ["xiaoshuo-877.pages.dev"];
 // PROXYIP_SKIP_HOSTS 里的域名自动并入
 const FIXED_NODE_DOMAINS = [
     "cloudflare-ech.com",
-    "edge-2.jiayusail.de5.net",
-    "qifei.jiayusail.dynv6.net",
     ...PROXYIP_SKIP_HOSTS
 ];
 

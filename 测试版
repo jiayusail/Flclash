@@ -1,0 +1,1841 @@
+// Clash_rule.js V6.8 家宽链式前置版（无 Proxy IP）
+// mihomo / FlClash 覆写脚本，主要功能：
+//   · 节点统一命名为"国旗 简称 原名"，按国家地区自动建测速组，另有全部节点自动选择与手动选择
+//   · DNS：fake-ip + 国内外分流；海外域名经代理用海外 DoH 解析，节点自身域名固定走国内 DoH；
+//     订阅显式设置的节点解析 DNS 独占使用，未设置时用脚本默认值
+//   · 规则：广告 / 追踪拦截，QUIC / STUN 屏蔽，BT 直连，常用应用分流，国内直连，其余走节点选择
+//   · 同时支持本地节点订阅与 proxy-providers 订阅；节点按名称自然排序
+//   · 家宽模式（CFNext OpenVPN 节点）链式代理：
+//       - 脚本内置 FRONT_NODES（前置节点），自动注入订阅，并作为普通节点参与自动选择 / 地区组
+//       - 给每个家宽 OpenVPN 节点补上 dialer-proxy: 隧道前置
+//       - 「隧道前置」组：手动选择用哪个前置节点（默认「前置自动」取延迟最低）
+//       - 「家宽出口」组：选择落地的家宽节点；链路 = 本机 → 前置节点 → 家宽节点
+//       - 家宽节点命名为"国旗 简称 原名"（如 🇯🇵 JP 家宽JP-2），不参与地区组 / 自动选择 / 手动选择
+// 使用说明：
+//   · 需较新的 mihomo 内核；首次启动需联网下载规则集，请在日志确认全部下载成功
+//   · 使用本脚本后请关闭 FlClash 的"DNS 覆写"，DNS 配置已全部写进脚本
+//   · 屏蔽 QUIC / STUN、BT 直连已写进本脚本，请勿再在 FlClash"附加规则"里重复开启
+//   · 本版不含 ProxyIP 绑定，节点 path 不会被改写
+
+// ════════════════════════════════════════
+// 一、个人维护区（常改的都在这里）
+// ════════════════════════════════════════
+
+// 自定义域名，优先于所有规则集；写主域名即可，自动匹配子域名。
+// CUSTOM_PROXY 走节点选择（DNS 用海外 DoH），CUSTOM_DIRECT 直连（DNS 用国内 DoH）。
+// ".cn" 作为国内站直连兜底
+const CUSTOM_PROXY = ["bilibili.tv", "biliintl.com", "bilicdn1.com"];
+const CUSTOM_DIRECT = ["cn"];
+
+// 节点基础设施域名（ECH 配置查询域名、节点 SNI / WS Host 域名），固定走国内 DoH。
+// proxy-providers 订阅时脚本看不到节点，必须在这里写死，否则 ECH 查询会经代理出站形成循环
+const FIXED_NODE_DOMAINS = [
+    "cloudflare-ech.com"
+];
+
+// 前置节点：家宽 OpenVPN 节点拨号时经由这些节点出去（链式代理的第一跳）。
+// 脚本会把它们注入订阅的 proxies；订阅里已有同名节点时不重复注入。
+// 想增删前置节点，直接改这个数组即可（清空则回退为"全部普通节点自动选"）
+const FRONT_NODES = [
+    {
+        "client-fingerprint": "firefox",
+        "ech-opts": {
+            enable: true,
+            "query-server-name": "cloudflare-ech.com"
+        },
+        name: "🇭🇰 HK 优选反代高速-IPv4-44ms-1.05MB/s",
+        network: "ws",
+        port: 443,
+        server: "104.17.111.190",
+        servername: "qifei.jiayusail.dynv6.net",
+        "skip-cert-verify": false,
+        tls: true,
+        type: "vless",
+        uuid: "b72fe186-ae01-4be1-8448-f399cecde32f",
+        "ws-opts": {
+            headers: { Host: "qifei.jiayusail.dynv6.net" },
+            path: "/qa/picture/edu/proxyip=ProxyIP.HK.CMLiussss.net"
+        },
+        "ip-version": "ipv4-prefer"
+    },
+    {
+        "client-fingerprint": "firefox",
+        "ech-opts": {
+            enable: true,
+            "query-server-name": "cloudflare-ech.com"
+        },
+        name: "🇭🇰 HK 优选反代高速-IPv4-44ms-1.20MB/s",
+        network: "ws",
+        port: 443,
+        server: "172.64.148.133",
+        servername: "edge-3.mystats.eu.cc",
+        "skip-cert-verify": false,
+        tls: true,
+        type: "vless",
+        uuid: "b72fe186-ae01-4be1-8448-f399cecde32f",
+        "ws-opts": {
+            headers: { Host: "edge-3.mystats.eu.cc" },
+            path: "/test/blog/uploads/proxyip=ProxyIP.HK.CMLiussss.net"
+        },
+        "ip-version": "ipv4-prefer"
+    },
+    {
+        "client-fingerprint": "firefox",
+        "ech-opts": {
+            enable: true,
+            "query-server-name": "cloudflare-ech.com"
+        },
+        name: "🇭🇰 HK 优选反代高速-IPv4-44ms-1.21MB/s",
+        network: "ws",
+        port: 443,
+        server: "172.64.153.173",
+        servername: "edge-2.jiayusail.de5.net",
+        "skip-cert-verify": false,
+        tls: true,
+        type: "vless",
+        uuid: "b72fe186-ae01-4be1-8448-f399cecde32f",
+        "ws-opts": {
+            headers: { Host: "edge-2.jiayusail.de5.net" },
+            path: "/readme/event/proxyip=ProxyIP.HK.CMLiussss.net"
+        },
+        "ip-version": "ipv4-prefer"
+    },
+    {
+        "client-fingerprint": "firefox",
+        "ech-opts": {
+            enable: true,
+            "query-server-name": "cloudflare-ech.com"
+        },
+        name: "🇭🇰 HK 优选反代高速-IPv4-45ms-1.27MB/s",
+        network: "ws",
+        port: 8443,
+        server: "104.17.111.190",
+        servername: "qifei.jiayusail.dynv6.net",
+        "skip-cert-verify": false,
+        tls: true,
+        type: "vless",
+        uuid: "b72fe186-ae01-4be1-8448-f399cecde32f",
+        "ws-opts": {
+            headers: { Host: "qifei.jiayusail.dynv6.net" },
+            path: "/html/drama/proxyip=ProxyIP.HK.CMLiussss.net"
+        },
+        "ip-version": "ipv4-prefer"
+    }
+];
+
+// ════════════════════════════════════════
+// 二、可调参数
+// ════════════════════════════════════════
+
+const REGION_MIN_NODES = 2;        // 地区节点数达到该值才建组（provider 订阅时节点不可见，不参与判断）
+const RS_INTERVAL = 604800;        // 规则集更新周期：一周
+const CN_DNS_DOH = [
+    "https://223.5.5.5/dns-query",
+    "https://doh.pub/dns-query"
+];
+const CN_DNS_PLAIN = ["223.5.5.5", "119.29.29.29"];
+const OVERSEAS_DNS_DOH = [
+    "https://1.1.1.1/dns-query#RULES",
+    "https://8.8.8.8/dns-query#RULES"
+];
+// 节点域名解析的默认 DNS：仅订阅自己没有设置 proxy-server-nameserver 时使用；
+// 订阅显式设置了就独占使用订阅的（同组 DNS 并发竞速，混用会让公共 DNS 抢答机场专线解析）
+const PROXY_SERVER_DNS = [
+    "https://dns.alidns.com/dns-query",
+    "https://doh.pub/dns-query"
+];
+const TEST_URL_PROXY = "https://www.gstatic.com/generate_204";
+const PREFER_H3 = false;          // DoH 是否并发尝试 HTTP/3：UDP 被限速或不支持时反而更慢
+
+// 测速组参数（地区组与自动选择组共用）
+const AUTO_TEST_INTERVAL = 300;   // 自动测速间隔（秒）
+const AUTO_TEST_TOLERANCE = 50;   // 容差（ms）：新节点比当前节点快超过该值才切换
+
+// 家宽测速参数：OpenVPN 经隧道拨号，握手慢，间隔放长、容差放大
+const HOME_TEST_INTERVAL = 600;
+const HOME_TEST_TOLERANCE = 50;
+
+// 固定组名（改名只需改这里，规则、DNS 校验、各组引用同步生效）。
+// 非隐藏组会作为顶部导航标签显示，所以"手动选择"拆成两个组：
+// MANUAL_GROUP 可见，在里面挑节点；MANUAL_ENTRY 隐藏，只在"节点选择"里显示为入口卡片
+const PROXY_GROUP = "节点选择";     // 唯一顶层入口，规则的兜底出口
+const MANUAL_GROUP = "手动选择";    // 手动挑任意节点
+const MANUAL_ENTRY = "✋手动选择";   // "节点选择"里的手动选择入口（隐藏组）
+const AUTO_GROUP = "⚡自动选择";    // 不分国家，全部节点里自动选延迟最低的
+const DIRECT_GROUP = "🏠直连连接";  // 成员是内建 DIRECT
+
+// 家宽相关组名。TUNNEL_GROUP 是家宽节点 dialer-proxy 的取值（脚本会自动给家宽节点补上）
+const TUNNEL_GROUP = "隧道前置";    // 前置节点选择组（可见，手动选第一跳）
+const FRONT_AUTO = "前置自动";      // 前置节点里自动选延迟最低（隐藏，作为"隧道前置"的第一个选项）
+const HOME_AUTO = "家宽自动";       // 家宽节点中自动选延迟最低（隐藏）
+const HOME_GROUP = "家宽出口";      // 手动挑家宽节点（落地），出现在"节点选择"和各应用组里
+// 过滤 UDP 家宽节点：前置节点是 EdgeTunnel（ws，只走 TCP），无法转发 OpenVPN 的 UDP 握手，
+// UDP 家宽节点经前置后必然连不通，开启后直接从订阅里剔除（判定：udp: true 或 proto: udp）
+const FILTER_UDP_HOME = true;
+// 家宽节点名关键词（CFNext 家宽节点原名均含"家宽"，如 家宽JP、家宽KR-2；改名后为"🇯🇵 JP 家宽JP"，所以匹配名称任意位置）
+const HOME_FILTER = "(?i)家宽";
+// 自动选择 / 手动选择 / 地区组 / 应用组统一排除的节点类型（家宽 OpenVPN 节点不参与）
+const NODE_EXCLUDE_TYPE = "direct|reject|openvpn";
+
+// 传输层 / 附加规则开关
+// 拒绝 UDP 443，迫使浏览器回退 TCP。EdgeTunnel（Workers / Pages）节点不转发 UDP，建议开启
+const BLOCK_QUIC = true;
+// 拒绝 STUN 常用 UDP 端口，防止 WebRTC 绕过代理暴露真实 IP；网页视频通话 / 在线会议受影响时改为 false
+const BLOCK_STUN = true;
+// BT tracker / PT 站点域名直连，避免占用节点额度（只能匹配域名，直连 IP 的 BT 对等流量不受影响）
+const BT_DIRECT = true;
+
+// 可选规则开关（关闭后对应规则集不会被创建和下载）
+// Microsoft 组默认选"直连连接"，需要代理时在面板里手动切回"节点选择"
+const MICROSOFT_DEFAULT_DIRECT = true;
+// 下载站直连（666OS Download）：迅雷、各类下载 CDN 不占节点流量
+const DOWNLOAD_DIRECT = true;
+// 追踪 / 统计域名拦截（666OS Tracking），与 category-ads-all 互补
+const BLOCK_TRACKING = true;
+// 国内 App 广告拦截（AWAvenue-Ads-Rule）：与 category-ads-all 有重叠、偶有误杀，默认关闭
+const BLOCK_AWAVENUE = false;
+
+// 规则集下载地址（统一用 jsdmirror 镜像）
+const RS_CDN = "https://cdn.jsdmirror.com/gh";
+const RS_BASE = `${RS_CDN}/MetaCubeX/meta-rules-dat@meta/geo`;
+const RS_666OS = `${RS_CDN}/666OS/rules@release/mihomo`;
+const RS_AWAVENUE = `${RS_CDN}/TG-Twilight/AWAvenue-Ads-Rule@main/Filters`;
+const RS_FAKEIP_FILTER = `${RS_CDN}/wwqgtxx/clash-rules@release/fakeip-filter.mrs`;
+
+// IPv6 / 双栈
+// on：强制开启（DNS 解析 AAAA、IPv6 fake-ip），不受客户端 IPv6 开关影响；follow：跟随客户端开关；off：强制关闭
+// 节点出站拨号 IP 版本：开启 IPv6 时用 ipv4-prefer（先 IPv4，不通再 IPv6），关闭时用 dual。
+// 只决定客户端连节点服务器用哪个协议栈，不影响最终出口。
+// 不用 ipv6-prefer：它曾导致优选域名节点 TCP 通但 TLS / WS 握手被重置，且不回退 IPv4
+const IPV6_MODE = "on";
+
+// DNS 防泄漏：false 时海外域名一律走脚本里的海外 DoH（经代理出站），忽略订阅自带的 nameserver
+const TRUST_SUB_NAMESERVER = false;
+
+// 订阅配置清理：删除订阅里的 listeners / authentication / skip-auth-prefixes
+// （其引用的策略组在本脚本重建后已不存在，会让内核报错，也可能把本机变成对局域网开放的代理）
+const SANITIZE_SUB_CONFIG = true;
+
+// 节点命名：true 时本地节点统一命名为"国旗 简称 原名"（如 🇭🇰 HK 联通优选），已有国旗 / 简称的保留并去重；
+// 没有任何地区信息的节点（如"三网优选"）会在名称前加一个图标。家宽节点不改名
+const RENAME_NODES = true;
+
+// ════════════════════════════════════════
+// 三、静态表与通用函数（无需修改）
+// ════════════════════════════════════════
+
+// 节点名里的信息类关键词（剩余流量、到期时间、群链接、"防失联页 https://…"等），这类节点不进可选列表
+const excludeFilter =
+    "(?i)(https?://|失联|剩余|官网|套餐|流量|到期|过期|更新|刷新|订阅|群|网址|客服|欢迎|加入|Expire|Traffic|Reset|(^|[^A-Za-z0-9])(\\d+(\\.\\d+)?\\s*(GB|TB)|\\d+\\s*Days?)([^A-Za-z0-9]|$))";
+
+// 内核用 Go 正则，JS 侧不支持 (?i) 前缀，需转换
+const toJsRegex = goStyleRegex =>
+    new RegExp(goStyleRegex.replace(/^\(\?i\)/, ""), "i");
+
+const excludeRe = toJsRegex(excludeFilter);
+
+// 两位国家代码 → 国旗 emoji
+const flagOf = code =>
+    String.fromCodePoint(
+        0x1f1e6 + code.charCodeAt(0) - 65,
+        0x1f1e6 + code.charCodeAt(1) - 65
+    );
+
+// 地区表。name：两位国家代码；cn：中文名（用于地区组命名）；
+// regex：内核 group filter 与 JS 侧共用同一串
+const regions = [
+    {
+        name: "AE",
+        cn: "阿联酋",
+        regex: "(?i)(阿联酋|阿聯酋|迪拜|阿布扎比|🇦🇪|(^|[^A-Za-z])UAE([^A-Za-z]|$)|Emirates|Dubai)",
+        icon: "https://cdn.jsdmirror.com/gh/HatScripts/circle-flags@gh-pages/flags/ae.svg"
+    },
+    {
+        name: "AR",
+        cn: "阿根廷",
+        regex: "(?i)(阿根廷|布宜诺斯艾利斯|🇦🇷|(^|[^A-Za-z])AR([^A-Za-z]|$)|(^|[^A-Za-z])ARG([^A-Za-z]|$)|Argentina)",
+        icon: "https://cdn.jsdmirror.com/gh/HatScripts/circle-flags@gh-pages/flags/ar.svg"
+    },
+    {
+        name: "AU",
+        cn: "澳大利亚",
+        regex: "(?i)(澳大利亚|澳大利亞|澳洲|悉尼|墨尔本|墨爾本|🇦🇺|(^|[^A-Za-z])AU([^A-Za-z]|$)|(^|[^A-Za-z])AUS([^A-Za-z]|$)|Australia|Sydney|Melbourne)",
+        icon: "https://cdn.jsdmirror.com/gh/HatScripts/circle-flags@gh-pages/flags/au.svg"
+    },
+    {
+        name: "BD",
+        cn: "孟加拉",
+        regex: "(?i)(孟加拉|孟加拉國|达卡|達卡|🇧🇩|(^|[^A-Za-z])BD([^A-Za-z]|$)|(^|[^A-Za-z])BGD([^A-Za-z]|$)|Bangladesh|Dhaka)",
+        icon: "https://cdn.jsdmirror.com/gh/HatScripts/circle-flags@gh-pages/flags/bd.svg"
+    },
+    {
+        name: "BR",
+        cn: "巴西",
+        regex: "(?i)(巴西|圣保罗|聖保羅|🇧🇷|(^|[^A-Za-z])BR([^A-Za-z]|$)|(^|[^A-Za-z])BRA([^A-Za-z]|$)|Brazil|Brasil|SaoPaulo)",
+        icon: "https://cdn.jsdmirror.com/gh/HatScripts/circle-flags@gh-pages/flags/br.svg"
+    },
+    {
+        name: "CA",
+        cn: "加拿大",
+        regex: "(?i)(加拿大|多伦多|多倫多|温哥华|溫哥華|🇨🇦|(^|[^A-Za-z])CA([^A-Za-z]|$)|(^|[^A-Za-z])CAN([^A-Za-z]|$)|Canada|Toronto|Vancouver)",
+        icon: "https://cdn.jsdmirror.com/gh/HatScripts/circle-flags@gh-pages/flags/ca.svg"
+    },
+    {
+        name: "CH",
+        cn: "瑞士",
+        regex: "(?i)(瑞士|苏黎世|蘇黎世|🇨🇭|(^|[^A-Za-z])CH([^A-Za-z]|$)|(^|[^A-Za-z])CHE([^A-Za-z]|$)|Switzerland|Zurich)",
+        icon: "https://cdn.jsdmirror.com/gh/HatScripts/circle-flags@gh-pages/flags/ch.svg"
+    },
+    {
+        name: "DE",
+        cn: "德国",
+        regex: "(?i)(德国|德國|法兰克福|法蘭克福|🇩🇪|(^|[^A-Za-z])DE([^A-Za-z]|$)|(^|[^A-Za-z])DEU([^A-Za-z]|$)|Germany|Frankfurt)",
+        icon: "https://cdn.jsdmirror.com/gh/HatScripts/circle-flags@gh-pages/flags/de.svg"
+    },
+    {
+        name: "FI",
+        cn: "芬兰",
+        regex: "(?i)(芬兰|芬蘭|赫尔辛基|赫爾辛基|🇫🇮|(^|[^A-Za-z])FI([^A-Za-z]|$)|(^|[^A-Za-z])FIN([^A-Za-z]|$)|Finland|Helsinki)",
+        icon: "https://cdn.jsdmirror.com/gh/HatScripts/circle-flags@gh-pages/flags/fi.svg"
+    },
+    {
+        name: "FR",
+        cn: "法国",
+        regex: "(?i)(法国|法國|巴黎|🇫🇷|(^|[^A-Za-z])FR([^A-Za-z]|$)|(^|[^A-Za-z])FRA([^A-Za-z]|$)|France|Paris)",
+        icon: "https://cdn.jsdmirror.com/gh/HatScripts/circle-flags@gh-pages/flags/fr.svg"
+    },
+    {
+        name: "GB",
+        cn: "英国",
+        regex: "(?i)(英国|英國|伦敦|倫敦|🇬🇧|(^|[^A-Za-z])UK([^A-Za-z]|$)|(^|[^A-Za-z])GB([^A-Za-z]|$)|(^|[^A-Za-z])GBR([^A-Za-z]|$)|United[ -]?Kingdom|England|London)",
+        icon: "https://cdn.jsdmirror.com/gh/HatScripts/circle-flags@gh-pages/flags/gb.svg"
+    },
+    {
+        name: "HK",
+        cn: "香港",
+        regex: "(?i)(香港|🇭🇰|(^|[^A-Za-z])HK([^A-Za-z]|$)|(^|[^A-Za-z])HKG([^A-Za-z]|$)|Hong[ -]?Kong)",
+        icon: "https://cdn.jsdmirror.com/gh/HatScripts/circle-flags@gh-pages/flags/hk.svg"
+    },
+    {
+        name: "ID",
+        cn: "印尼",
+        regex: "(?i)(印度尼西亚|印度尼西亞|印尼|雅加达|雅加達|🇮🇩|Indonesia|Jakarta|(^|[^A-Za-z])ID([^A-Za-z]|$)|(^|[^A-Za-z])IDN([^A-Za-z]|$))",
+        icon: "https://cdn.jsdmirror.com/gh/HatScripts/circle-flags@gh-pages/flags/id.svg"
+    },
+    {
+        // 印度([^尼]|$) 只排除"印度尼西亚"；含独立 token IN 的节点名可能同时命中 ID 与 IN，各组 filter 相互独立
+        name: "IN",
+        cn: "印度",
+        regex: "(?i)(印度([^尼]|$)|新德里|孟买|孟買|班加罗尔|班加羅爾|🇮🇳|(^|[^A-Za-z])India([^A-Za-z]|$)|Mumbai|Delhi|Bangalore|(^|[^A-Za-z])IN([^A-Za-z]|$)|(^|[^A-Za-z])IND([^A-Za-z]|$))",
+        icon: "https://cdn.jsdmirror.com/gh/HatScripts/circle-flags@gh-pages/flags/in.svg"
+    },
+    {
+        name: "JP",
+        cn: "日本",
+        regex: "(?i)(日本|东京|東京|大阪|🇯🇵|(^|[^A-Za-z])JP([^A-Za-z]|$)|(^|[^A-Za-z])JPN([^A-Za-z]|$)|Japan)",
+        icon: "https://cdn.jsdmirror.com/gh/HatScripts/circle-flags@gh-pages/flags/jp.svg"
+    },
+    {
+        name: "KR",
+        cn: "韩国",
+        regex: "(?i)(韩国|韓國|南韩|南韓|首尔|首爾|🇰🇷|(^|[^A-Za-z])KR([^A-Za-z]|$)|(^|[^A-Za-z])KOR([^A-Za-z]|$)|Korea)",
+        icon: "https://cdn.jsdmirror.com/gh/HatScripts/circle-flags@gh-pages/flags/kr.svg"
+    },
+    {
+        name: "LV",
+        cn: "拉脱维亚",
+        regex: "(?i)(拉脱维亚|拉脫維亞|里加|🇱🇻|(^|[^A-Za-z])LV([^A-Za-z]|$)|(^|[^A-Za-z])LVA([^A-Za-z]|$)|Latvia|Riga)",
+        icon: "https://cdn.jsdmirror.com/gh/HatScripts/circle-flags@gh-pages/flags/lv.svg"
+    },
+    {
+        name: "MY",
+        cn: "马来西亚",
+        regex: "(?i)(马来西亚|馬來西亞|吉隆坡|🇲🇾|(^|[^A-Za-z])MY([^A-Za-z]|$)|(^|[^A-Za-z])MYS([^A-Za-z]|$)|Malaysia)",
+        icon: "https://cdn.jsdmirror.com/gh/HatScripts/circle-flags@gh-pages/flags/my.svg"
+    },
+    {
+        name: "NL",
+        cn: "荷兰",
+        regex: "(?i)(荷兰|荷蘭|阿姆斯特丹|🇳🇱|(^|[^A-Za-z])NL([^A-Za-z]|$)|(^|[^A-Za-z])NLD([^A-Za-z]|$)|Netherlands|Amsterdam)",
+        icon: "https://cdn.jsdmirror.com/gh/HatScripts/circle-flags@gh-pages/flags/nl.svg"
+    },
+    {
+        name: "PH",
+        cn: "菲律宾",
+        regex: "(?i)(菲律宾|菲律賓|马尼拉|馬尼拉|宿务|宿霧|🇵🇭|(^|[^A-Za-z])PH([^A-Za-z]|$)|(^|[^A-Za-z])PHL([^A-Za-z]|$)|Philippines|Manila|Cebu)",
+        icon: "https://cdn.jsdmirror.com/gh/HatScripts/circle-flags@gh-pages/flags/ph.svg"
+    },
+    {
+        name: "PL",
+        cn: "波兰",
+        regex: "(?i)(波兰|波蘭|华沙|華沙|🇵🇱|(^|[^A-Za-z])PL([^A-Za-z]|$)|(^|[^A-Za-z])POL([^A-Za-z]|$)|Poland|Warsaw)",
+        icon: "https://cdn.jsdmirror.com/gh/HatScripts/circle-flags@gh-pages/flags/pl.svg"
+    },
+    {
+        name: "RO",
+        cn: "罗马尼亚",
+        regex: "(?i)(罗马尼亚|羅馬尼亞|布加勒斯特|🇷🇴|(^|[^A-Za-z])RO([^A-Za-z]|$)|(^|[^A-Za-z])ROU([^A-Za-z]|$)|Romania|Bucharest)",
+        icon: "https://cdn.jsdmirror.com/gh/HatScripts/circle-flags@gh-pages/flags/ro.svg"
+    },
+    {
+        name: "RU",
+        cn: "俄罗斯",
+        regex: "(?i)(俄罗斯|俄羅斯|莫斯科|🇷🇺|(^|[^A-Za-z])RU([^A-Za-z]|$)|(^|[^A-Za-z])RUS([^A-Za-z]|$)|Russia|Moscow)",
+        icon: "https://cdn.jsdmirror.com/gh/HatScripts/circle-flags@gh-pages/flags/ru.svg"
+    },
+    {
+        name: "SE",
+        cn: "瑞典",
+        regex: "(?i)(瑞典|斯德哥尔摩|斯德哥爾摩|🇸🇪|(^|[^A-Za-z])SE([^A-Za-z]|$)|(^|[^A-Za-z])SWE([^A-Za-z]|$)|Sweden|Stockholm)",
+        icon: "https://cdn.jsdmirror.com/gh/HatScripts/circle-flags@gh-pages/flags/se.svg"
+    },
+    {
+        name: "SG",
+        cn: "新加坡",
+        regex: "(?i)(新加坡|狮城|獅城|🇸🇬|(^|[^A-Za-z])SG([^A-Za-z]|$)|(^|[^A-Za-z])SGP([^A-Za-z]|$)|Singapore)",
+        icon: "https://cdn.jsdmirror.com/gh/HatScripts/circle-flags@gh-pages/flags/sg.svg"
+    },
+    {
+        name: "TH",
+        cn: "泰国",
+        regex: "(?i)(泰国|泰國|曼谷|🇹🇭|Thailand|Bangkok|(^|[^A-Za-z])TH([^A-Za-z]|$)|(^|[^A-Za-z])THA([^A-Za-z]|$))",
+        icon: "https://cdn.jsdmirror.com/gh/HatScripts/circle-flags@gh-pages/flags/th.svg"
+    },
+    {
+        name: "TR",
+        cn: "土耳其",
+        regex: "(?i)(土耳其|伊斯坦布尔|🇹🇷|(^|[^A-Za-z])TR([^A-Za-z]|$)|(^|[^A-Za-z])TUR([^A-Za-z]|$)|Turkey|Türkiye|Istanbul)",
+        icon: "https://cdn.jsdmirror.com/gh/HatScripts/circle-flags@gh-pages/flags/tr.svg"
+    },
+    {
+        name: "TW",
+        cn: "台湾",
+        regex: "(?i)(台湾|台灣|台北|新北|🇹🇼|(^|[^A-Za-z])TW([^A-Za-z]|$)|(^|[^A-Za-z])TWN([^A-Za-z]|$)|Taiwan)",
+        icon: "https://cdn.jsdmirror.com/gh/HatScripts/circle-flags@gh-pages/flags/tw.svg"
+    },
+    {
+        name: "US",
+        cn: "美国",
+        regex: "(?i)(美国|美國|洛杉矶|洛杉磯|圣何塞|聖何塞|硅谷|矽谷|西雅图|西雅圖|纽约|紐約|🇺🇸|(^|[^A-Za-z])US([^A-Za-z]|$)|(^|[^A-Za-z])USA([^A-Za-z]|$)|United[ -]?States)",
+        icon: "https://cdn.jsdmirror.com/gh/HatScripts/circle-flags@gh-pages/flags/us.svg"
+    },
+    {
+        name: "VN",
+        cn: "越南",
+        regex: "(?i)(越南|河内|河內|胡志明|🇻🇳|(^|[^A-Za-z])VN([^A-Za-z]|$)|(^|[^A-Za-z])VNM([^A-Za-z]|$)|Viet[ -]?Nam|Hanoi|Ho[ -]?Chi[ -]?Minh)",
+        icon: "https://cdn.jsdmirror.com/gh/HatScripts/circle-flags@gh-pages/flags/vn.svg"
+    }
+];
+
+// 地区组显示名："国旗 + 中文名 + 节点"，如 🇭🇰香港节点（仅用于策略组名）
+regions.forEach(region => {
+    region.label = flagOf(region.name) + region.cn + "节点";
+});
+
+// 应用组名单与图标；direct: true 的组默认选中"直连连接"
+const apps = [
+    { name: "AI", icon: "openai.png" },
+    { name: "Apple", icon: "apple.png" },
+    {
+        name: "GitHub",
+        icon: "https://cdn.jsdmirror.com/gh/kanwox/Proxy-Rule@main/assets/github.png"
+    },
+    { name: "Google", icon: "google.png" },
+    {
+        name: "Microsoft",
+        icon: "microsoft.png",
+        direct: MICROSOFT_DEFAULT_DIRECT
+    },
+    { name: "Spotify", icon: "spotify.png" },
+    { name: "Telegram", icon: "telegram.png" },
+    { name: "TikTok", icon: "tiktok.png" },
+    { name: "TV", icon: "netflix.png" },
+    { name: "Twitch", icon: "twitch.png" },
+    { name: "X", icon: "x.png" },
+    { name: "YouTube", icon: "youtube.png" }
+];
+
+// 脚本生成的固定组名
+const OWN_GROUPS = [
+    PROXY_GROUP,
+    AUTO_GROUP,
+    MANUAL_GROUP,
+    MANUAL_ENTRY,
+    DIRECT_GROUP,
+    TUNNEL_GROUP,
+    FRONT_AUTO,
+    HOME_AUTO,
+    HOME_GROUP,
+    ...apps.map(app => app.name)
+];
+
+// 内建策略名（RULES：DNS 连接按路由规则出站）
+const BUILTIN_POLICIES = new Set([
+    "DIRECT",
+    "REJECT",
+    "REJECT-DROP",
+    "COMPATIBLE",
+    "PASS",
+    "PASS-RULE",
+    "GLOBAL",
+    "RULES"
+]);
+
+// 节点与策略组共享命名空间且节点名必须唯一：与组名 / 内建策略重名、或订阅内重名的节点会让内核启动报错，
+// main 里会先行改名
+const RESERVED_NAMES = new Set([
+    ...OWN_GROUPS,
+    ...regions.map(region => region.label),
+    ...BUILTIN_POLICIES
+]);
+
+// 部分客户端脚本引擎没有 console.warn，统一降级输出
+const warnLog = (...args) => {
+    if (typeof console === "undefined") return;
+    if (typeof console.warn === "function") console.warn(...args);
+    else if (typeof console.log === "function") console.log(...args);
+};
+
+const isPlainObject = value =>
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value);
+
+const asPlainObject = value => (isPlainObject(value) ? value : {});
+
+// 家宽节点：OpenVPN 类型，或通过 dialer-proxy 依赖"隧道前置"的节点。
+// 这类节点保持原名，不参与地区组 / 自动选择 / 手动选择，由"家宽自动""家宽出口"单独管理
+const isHomeProxy = proxy =>
+    !!proxy &&
+    (proxy.type === "openvpn" ||
+        proxy["dialer-proxy"] === TUNNEL_GROUP);
+
+const stringList = value => {
+    if (value === undefined || value === null) return [];
+
+    const list = Array.isArray(value) ? value : [value];
+
+    return list
+        .filter(item => typeof item === "string")
+        .map(item => item.trim())
+        .filter(Boolean);
+};
+
+// 自定义域名清洗：去空白、去首部 "." 或 "+."、去重
+const cleanDomains = list => [
+    ...new Set(
+        stringList(list)
+            .map(domain => domain.replace(/^(\+\.|\.)/, ""))
+            .filter(Boolean)
+    )
+];
+
+// 自然排序：名字中的连续数字段按数值比较（"HK 2" 排在 "HK 10" 之前）。
+// 数字段与文本段错位时数字段在前；数值相同（"01" 与 "1"）时按文本比较，保证全序
+const naturalCompare = (a, b) => {
+    const split = s => String(s).match(/\d+|\D+/g) || [];
+    const pa = split(a);
+    const pb = split(b);
+    const len = Math.min(pa.length, pb.length);
+
+    for (let i = 0; i < len; i++) {
+        if (pa[i] === pb[i]) continue;
+
+        const numA = /^\d/.test(pa[i]);
+        const numB = /^\d/.test(pb[i]);
+
+        if (numA && numB) {
+            const diff = Number(pa[i]) - Number(pb[i]);
+            if (diff !== 0) return diff;
+        } else if (numA !== numB) {
+            return numA ? -1 : 1;
+        }
+
+        return pa[i] < pb[i] ? -1 : 1;
+    }
+
+    return pa.length - pb.length;
+};
+
+// ── 节点命名与地区识别 ──
+// 命名格式："国旗 简称 原名"。识别顺序：①名字里已有的国旗；②去掉 []/()/【】内容后最靠前的地区关键词
+// （避免括号里的域名误导判断）；③完整名字。
+// 带有表中没有的国旗（如 🇨🇳）的节点、信息类节点保持原样。proxy-providers 的节点脚本不可见，无法改名
+const CODE_ALIASES = {
+    AE: ["UAE"], AR: ["ARG"], AU: ["AUS"], BD: ["BGD"], BR: ["BRA"],
+    CA: ["CAN"], CH: ["CHE"], DE: ["DEU"], FI: ["FIN"], FR: ["FRA"],
+    GB: ["UK", "GBR"], HK: ["HKG"], ID: ["IDN"], IN: ["IND"],
+    JP: ["JPN"], KR: ["KOR"], LV: ["LVA"], MY: ["MYS"], NL: ["NLD"],
+    PH: ["PHL"], PL: ["POL"], RO: ["ROU"], RU: ["RUS"], SE: ["SWE"], SG: ["SGP"],
+    TH: ["THA"], TR: ["TUR"], TW: ["TWN"], US: ["USA"], VN: ["VNM"]
+};
+
+const regionByCode = new Map(
+    regions.map(region => [region.name, region])
+);
+const regionRegexes = regions.map(region => ({
+    code: region.name,
+    re: toJsRegex(region.regex)
+}));
+
+// 取名字里出现的全部国旗对应的两位代码（按出现顺序；不用带 u 标志的正则，兼容性更好）
+const flagCodesIn = name => {
+    const cps = Array.from(name).map(ch => ch.codePointAt(0));
+    const found = [];
+
+    for (let i = 0; i + 1 < cps.length; i++) {
+        if (
+            cps[i] >= 0x1f1e6 &&
+            cps[i] <= 0x1f1ff &&
+            cps[i + 1] >= 0x1f1e6 &&
+            cps[i + 1] <= 0x1f1ff
+        ) {
+            found.push(
+                String.fromCharCode(
+                    cps[i] - 0x1f1e6 + 65,
+                    cps[i + 1] - 0x1f1e6 + 65
+                )
+            );
+            i++;
+        }
+    }
+
+    return found;
+};
+
+const BRACKET_RE = /\[[^\]]*\]|【[^】]*】|\([^)]*\)|（[^）]*）/g;
+
+const earliestRegion = text => {
+    let best = null;
+
+    for (const item of regionRegexes) {
+        const match = item.re.exec(text);
+
+        if (match && (best === null || match.index < best.index)) {
+            best = { code: item.code, index: match.index };
+        }
+    }
+
+    return best ? best.code : "";
+};
+
+const detectRegion = name => {
+    const flags = flagCodesIn(name);
+
+    for (const code of flags) {
+        if (regionByCode.has(code)) return code;
+    }
+
+    // 带有表中没有的国旗：尊重原标注
+    if (flags.length > 0) return "";
+
+    return (
+        earliestRegion(name.replace(BRACKET_RE, " ")) ||
+        earliestRegion(name)
+    );
+};
+
+const formatNodeName = (name, code) => {
+    const flag = flagOf(code);
+    const tokens = [code, ...(CODE_ALIASES[code] || [])];
+    const tokenRe = new RegExp(
+        "(^|[^A-Za-z0-9])(?:" + tokens.join("|") + ")(?![A-Za-z])",
+        "gi"
+    );
+
+    // 括号内容先换成占位符、清理完再还原，避免域名后缀（.nl / .us / .sg）被当成地区简称误删
+    const bracketParts = [];
+    const masked = name.replace(BRACKET_RE, part => {
+        bracketParts.push(part);
+        return "\uE000" + (bracketParts.length - 1) + "\uE001";
+    });
+
+    // 去掉括号外已有的同地区国旗与简称，避免重复
+    const rest = masked
+        .split(flag)
+        .join(" ")
+        .replace(tokenRe, "$1 ")
+        .replace(/\s+/g, " ")
+        .replace(/^[\s\-_|·•,，、:：/.]+/, "")
+        .replace(/[\s\-_|·•]+$/, "")
+        .trim()
+        .replace(
+            /\uE000(\d+)\uE001/g,
+            (_, index) => bracketParts[Number(index)]
+        );
+
+    return rest ? flag + " " + code + " " + rest : flag + " " + code;
+};
+
+// 无地区信息节点的名称前缀图标
+const NO_REGION_ICONS = ["🔀", "🌐", "🔗", "📡", "🛜", "✅", "🌀", "🔰"];
+
+const hasNoRegionIcon = name =>
+    NO_REGION_ICONS.some(icon => name.startsWith(icon + " "));
+
+// 按节点名哈希取图标：每个节点图标不同，同名节点每次刷新结果一致
+const pickNoRegionIcon = name => {
+    let h = 0;
+
+    for (let i = 0; i < name.length; i++) {
+        h = (h * 31 + name.charCodeAt(i)) >>> 0;
+    }
+
+    return NO_REGION_ICONS[h % NO_REGION_ICONS.length];
+};
+
+// ── DNS 清洗通用函数 ──
+
+// 节点解析 DNS 不得经代理 / 策略组出站（否则"需要节点才能解析节点"形成循环），去掉 # 后的目标名，只保留 k=v 参数
+const stripProxyRefs = entry => {
+    const s = String(entry);
+    const hash = s.indexOf("#");
+
+    if (hash === -1) return s;
+
+    const opts = s
+        .slice(hash + 1)
+        .split("&")
+        .map(part => part.trim())
+        .filter(part => part !== "" && part.includes("="));
+
+    return opts.length > 0
+        ? s.slice(0, hash) + "#" + opts.join("&")
+        : s.slice(0, hash);
+};
+
+const stripProxyRefsPolicy = policy => {
+    const out = {};
+
+    for (const key of Object.keys(policy)) {
+        out[key] = stringList(policy[key]).map(stripProxyRefs);
+    }
+
+    return out;
+};
+
+// 指向已重建规则集 / 内建 geo 的键会报错或触发额外下载，一律丢弃
+const isDanglingKey = key => /^(rule-set|geosite|geoip):/i.test(key);
+
+// 是否为纯域名（非 IP）
+const isDomainName = value =>
+    typeof value === "string" &&
+    /^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/.test(value) &&
+    !/^\d+(\.\d+){3}$/.test(value);
+
+// 仅这三类协议有 client-fingerprint 字段
+const FP_OK = ["vless", "vmess", "trojan"];
+
+// provider 节点的指纹注入表达式（节点运行时才出现，只能用 override 表达式），条件须与 main 里本地节点的判定一致；
+// 用 .["client-fingerprint"] 避免 yq / jq 把连字符误解析为减法
+const FP_EXPR =
+    '(select(.type == "trojan" or ((.type == "vless" or .type == "vmess") and (.tls == true or has("reality-opts")))) | select(has("client-fingerprint") | not) | .["client-fingerprint"]) = "chrome"';
+
+// 规范化为表达式数组；类型非法返回 null（调用方原样保留该 provider，不注入）
+const normalizeOverrideExpr = raw => {
+    if (raw === undefined || raw === null) return [];
+
+    if (typeof raw === "string") {
+        return raw.length > 0 ? [raw] : [];
+    }
+
+    if (Array.isArray(raw)) {
+        if (raw.some(item => typeof item !== "string")) {
+            return null;
+        }
+
+        return raw.filter(item => item.length > 0);
+    }
+
+    return null;
+};
+
+// ════════════════════════════════════════
+// 四、主函数
+// ════════════════════════════════════════
+
+function main(params) {
+    if (!params || typeof params !== "object") params = {};
+    if (!Array.isArray(params.proxies)) params.proxies = [];
+
+    // 丢弃空名 / 非法节点（内核要求节点名非空且唯一）
+    params.proxies = params.proxies.filter(
+        proxy =>
+            proxy &&
+            typeof proxy.name === "string" &&
+            proxy.name !== ""
+    );
+
+    // 剔除 UDP 家宽节点（见 FILTER_UDP_HOME）
+    if (FILTER_UDP_HOME) {
+        params.proxies = params.proxies.filter(
+            proxy =>
+                !(
+                    proxy.type === "openvpn" &&
+                    (proxy.udp === true ||
+                        String(proxy.proto || "").toLowerCase() === "udp")
+                )
+        );
+    }
+
+    // ── 0. 注入前置节点 + 给家宽节点补 dialer-proxy ──
+    // frontProxies 记录注入的节点对象：后面节点会被改名 / 去重，按对象取最终名字最可靠
+    const frontProxies = [];
+    const existingNames = new Set(params.proxies.map(proxy => proxy.name));
+
+    FRONT_NODES.forEach(node => {
+        if (!isPlainObject(node) || typeof node.name !== "string") return;
+
+        // 订阅里已有同名节点：不重复注入，但仍把订阅里的那个当作前置节点
+        if (existingNames.has(node.name)) {
+            const exist = params.proxies.find(p => p.name === node.name);
+            if (exist && !isHomeProxy(exist)) frontProxies.push(exist);
+            return;
+        }
+
+        // 深拷贝，避免脚本多次运行时互相污染
+        const copy = JSON.parse(JSON.stringify(node));
+
+        params.proxies.push(copy);
+        existingNames.add(copy.name);
+        frontProxies.push(copy);
+    });
+
+    // 家宽 OpenVPN 节点统一经"隧道前置"组拨号（订阅已指定 dialer-proxy 的不改）
+    params.proxies.forEach(proxy => {
+        if (proxy.type === "openvpn" && !proxy["dialer-proxy"]) {
+            proxy["dialer-proxy"] = TUNNEL_GROUP;
+        }
+    });
+
+    // 记住面板手动选择与 fake-ip 缓存；订阅已设置的项以订阅为准
+    params.profile = Object.assign(
+        { "store-selected": true, "store-fake-ip": true },
+        isPlainObject(params.profile) ? params.profile : {}
+    );
+
+    // 订阅是否使用 proxy-providers（决定地区组是全量还是按节点数筛选）
+    const subHasProviders =
+        Object.keys(params["proxy-providers"] || {}).length > 0;
+
+    // 订阅里是否有家宽节点（有才建"隧道前置""家宽自动""家宽出口"）
+    const hasHomeNodes = params.proxies.some(isHomeProxy);
+
+    // ── 1. 基础选项 ──
+    Object.assign(params, {
+        "unified-delay": true,
+        // 并发尝试多个 IP，取最快握手
+        "tcp-concurrent": true,
+        // 不匹配进程名，省掉每条连接的进程查找
+        "find-process-mode": "off",
+        // TCP 保活（秒）：平衡移动端电量与 NAT 会话活性
+        "keep-alive-idle": 300,
+        "keep-alive-interval": 30
+    });
+
+    // IPv6 由 IPV6_MODE 决定
+    const ipv6Enabled =
+        IPV6_MODE === "on"
+            ? true
+            : IPV6_MODE === "off"
+              ? false
+              : params.ipv6 === true;
+    params.ipv6 = ipv6Enabled;
+    // 节点出站 IP 版本，说明见 IPV6_MODE
+    const defaultIpVersion = ipv6Enabled ? "ipv4-prefer" : "dual";
+
+    // 内核已移除该字段，保留会启动报错
+    delete params["global-client-fingerprint"];
+
+    if (SANITIZE_SUB_CONFIG) {
+        delete params.listeners;
+        delete params.authentication;
+        delete params["skip-auth-prefixes"];
+    }
+
+    const sniffProtocols = {
+        HTTP: {
+            ports: [80, "8080-8880"],
+            "override-destination": true
+        },
+        TLS: {
+            ports: [443, 8443]
+        }
+    };
+
+    // 已屏蔽 UDP 443 时 QUIC 嗅探无意义
+    if (!BLOCK_QUIC) {
+        sniffProtocols.QUIC = { ports: [443, 8443] };
+    }
+
+    params.sniffer = {
+        enable: true,
+        "force-dns-mapping": true,
+        // 纯 IP 流量也嗅探：从 TLS SNI / HTTP Host 还原域名参与分流
+        "parse-pure-ip": true,
+        "override-destination": true,
+        sniff: sniffProtocols,
+        "skip-domain": [
+            // 米家设备的 SNI 恰好是 "Mijia Cloud"（非域名），按精确匹配跳过嗅探
+            "Mijia Cloud",
+            "+.apple.com",
+            "+.openai.com",
+            "+.oaistatic.com",
+            "+.oaiusercontent.com",
+            "+.chatgpt.com"
+        ]
+    };
+
+    // ── 2. 节点处理：命名 → 去重 → 排序 → 出站 IP 版本 / 指纹 ──
+    const proxyRegion = new Map();   // 节点对象 → 地区代码（仅本地节点）
+    const renamedFrom = new Map();   // 旧名 → 新名，用于同步 dialer-proxy 引用
+
+    if (RENAME_NODES) {
+        params.proxies.forEach(proxy => {
+            // 家宽节点：保留完整原名，只在前面加"国旗 简称"（如 家宽JP-2 → 🇯🇵 JP 家宽JP-2）；
+            // 识别不到地区、或已带国旗的不动
+            if (isHomeProxy(proxy)) {
+                if (flagCodesIn(proxy.name).length > 0) return;
+
+                const homeCode = detectRegion(proxy.name);
+
+                if (!homeCode) return;
+
+                const homeName =
+                    flagOf(homeCode) + " " + homeCode + " " + proxy.name;
+
+                if (!renamedFrom.has(proxy.name)) {
+                    renamedFrom.set(proxy.name, homeName);
+                }
+
+                proxy.name = homeName;
+                return;
+            }
+
+            if (
+                proxy.type === "direct" ||
+                proxy.type === "reject" ||
+                excludeRe.test(proxy.name)
+            ) {
+                return;
+            }
+
+            const code = detectRegion(proxy.name);
+
+            if (!code) {
+                // 带有表中没有的国旗：不加图标
+                if (flagCodesIn(proxy.name).length > 0) return;
+
+                // 已加过图标：不重复加
+                if (hasNoRegionIcon(proxy.name)) return;
+
+                const iconName =
+                    pickNoRegionIcon(proxy.name) + " " + proxy.name;
+
+                if (!renamedFrom.has(proxy.name)) {
+                    renamedFrom.set(proxy.name, iconName);
+                }
+
+                proxy.name = iconName;
+                return;
+            }
+
+            const newName = formatNodeName(proxy.name, code);
+
+            proxyRegion.set(proxy, code);
+
+            if (newName !== proxy.name) {
+                if (!renamedFrom.has(proxy.name)) {
+                    renamedFrom.set(proxy.name, newName);
+                }
+
+                proxy.name = newName;
+            }
+        });
+
+        // 链式代理：dialer-proxy 按名字引用其它节点，改名后同步更新
+        // （引用的是策略组名如"隧道前置"时不在改名表里，保持不变）
+        params.proxies.forEach(proxy => {
+            const dialer = proxy["dialer-proxy"];
+
+            if (typeof dialer === "string" && renamedFrom.has(dialer)) {
+                proxy["dialer-proxy"] = renamedFrom.get(dialer);
+            }
+        });
+    }
+
+    // 去重 / 避开保留名
+    const usedProxyNames = new Set();
+
+    params.proxies.forEach(proxy => {
+        let name = proxy.name;
+
+        if (RESERVED_NAMES.has(name) || usedProxyNames.has(name)) {
+            const reservedHit = RESERVED_NAMES.has(name);
+            let candidate = name;
+            let suffix = 0;
+
+            do {
+                suffix++;
+                candidate = reservedHit
+                    ? "节点·" + name + (suffix > 1 ? "·" + suffix : "")
+                    : name + "·" + suffix;
+            } while (
+                RESERVED_NAMES.has(candidate) ||
+                usedProxyNames.has(candidate)
+            );
+
+            name = candidate;
+            proxy.name = name;
+        }
+
+        usedProxyNames.add(name);
+    });
+
+    // 自然排序（在改名、去重之后）：各组用 include-all 取节点，组内顺序即此处顺序；
+    // proxy-providers 的节点顺序由内核决定
+    params.proxies.sort((a, b) => naturalCompare(a.name, b.name));
+
+    // 前置节点的最终名字（改名 / 去重 / 排序之后），按自然排序展示
+    const frontNames = frontProxies
+        .map(proxy => proxy.name)
+        .sort(naturalCompare);
+
+    // 本地节点：补出站 IP 版本与 TLS 指纹（不覆盖订阅已有取值；家宽节点保持原样）
+    params.proxies.forEach(proxy => {
+        if (isHomeProxy(proxy)) return;
+
+        if (
+            proxy.type !== "direct" &&
+            !("ip-version" in proxy)
+        ) {
+            proxy["ip-version"] = defaultIpVersion;
+        }
+
+        if (
+            FP_OK.indexOf(proxy.type) !== -1 &&
+            !proxy["client-fingerprint"]
+        ) {
+            const usesTLS =
+                proxy.type === "trojan" ||
+                proxy.tls === true ||
+                proxy["reality-opts"];
+
+            if (usesTLS) {
+                proxy["client-fingerprint"] = "chrome";
+            }
+        }
+    });
+
+    // provider 节点：健康检查 + 出站 IP 版本 + 指纹（脚本不可见节点，只能用 override 表达式）
+    Object.entries(params["proxy-providers"] || {}).forEach(
+        ([name, provider]) => {
+            if (!provider || typeof provider !== "object") {
+                return;
+            }
+
+            // 组的 url 健康检查只测 proxies 字段成员，provider 节点须靠自身 health-check 产出延迟，
+            // 否则地区组拿不到延迟。enable 强制开启，其余项以订阅为准
+            const subHealthCheck = isPlainObject(
+                provider["health-check"]
+            )
+                ? provider["health-check"]
+                : {};
+
+            provider["health-check"] = Object.assign(
+                {
+                    enable: true,
+                    url: TEST_URL_PROXY,
+                    interval: 300,
+                    timeout: 8000,
+                    "expected-status": 204,
+                    lazy: true
+                },
+                subHealthCheck,
+                { enable: true }
+            );
+
+            const override = provider.override;
+
+            if (
+                override !== undefined &&
+                override !== null &&
+                (typeof override !== "object" ||
+                    Array.isArray(override))
+            ) {
+                return;
+            }
+
+            const existingExpr = normalizeOverrideExpr(
+                (override || {})["override-expr"]
+            );
+
+            if (existingExpr === null) return;
+
+            // 保留上游表达式顺序；指纹表达式最多出现一次（订阅每次刷新都会重跑本段）
+            const finalExpr = existingExpr.includes(FP_EXPR)
+                ? existingExpr
+                : [...existingExpr, FP_EXPR];
+
+            const mergedOverride = Object.assign(
+                {},
+                override || {}
+            );
+
+            if (!("ip-version" in mergedOverride)) {
+                mergedOverride["ip-version"] = defaultIpVersion;
+            }
+
+            mergedOverride["override-expr"] = finalExpr;
+            provider.override = mergedOverride;
+        }
+    );
+
+    // ── 3. 地区统计 ──
+    // direct / reject 类型与家宽节点不进任何普通可选组
+    const allProxies = params.proxies.filter(
+        proxy =>
+            proxy.type !== "direct" &&
+            proxy.type !== "reject" &&
+            !isHomeProxy(proxy)
+    );
+
+    // 本地订阅且已统一命名时，地区组按"国旗 简称"前缀精确匹配，
+    // 避免括号里的域名把节点拉进别的地区组
+    const anchoredGroups = RENAME_NODES && !subHasProviders;
+
+    const matchedRegions = regions.filter(region => {
+        let count = 0;
+
+        if (anchoredGroups) {
+            for (const proxy of allProxies) {
+                if (proxyRegion.get(proxy) === region.name) {
+                    count++;
+                    if (count >= REGION_MIN_NODES) return true;
+                }
+            }
+
+            return false;
+        }
+
+        const regex = toJsRegex(region.regex);
+
+        for (const proxy of allProxies) {
+            if (
+                regex.test(proxy.name) &&
+                !excludeRe.test(proxy.name)
+            ) {
+                count++;
+                if (count >= REGION_MIN_NODES) return true;
+            }
+        }
+
+        return false;
+    });
+
+    // provider 订阅时脚本看不到节点，保留全部地区组
+    const activeRegions = subHasProviders ? regions : matchedRegions;
+    const hasActiveRegions = activeRegions.length > 0;
+    const regionLabels = activeRegions.map(region => region.label);
+
+    // ── 4. DNS ──
+    // 订阅 DNS 里指向已重建策略组的 "#组名" 后缀会让内核报错，需清洗；
+    // 无法沿用的字段一律丢弃，以脚本配置为准
+
+    // 实际会建组的地区组名
+    const REGION_NAMES = new Set(regionLabels);
+
+    // 本地节点名也是合法的 "#节点名" 引用（指定解析出口节点）；provider 订阅下该集合为空
+    const PROXY_NAMES = new Set(
+        allProxies.map(proxy => proxy && proxy.name).filter(Boolean)
+    );
+
+    // 校验 DNS 条目 "#目标"：合法则保留，指向已不存在的对象则剥掉并补 #RULES
+    const refValid = ref =>
+        BUILTIN_POLICIES.has(ref) ||
+        OWN_GROUPS.indexOf(ref) !== -1 ||
+        REGION_NAMES.has(ref) ||
+        PROXY_NAMES.has(ref);
+
+    // # 后按 "&" 分段：含 "=" 的是参数（h3= / ecs= 等）原样保留，裸段是目标名需校验；
+    // 无有效目标时补 #RULES 交给路由，避免剥成裸 URL 直连（会招致污染与泄漏）
+    const stripDanglingRef = entry => {
+        const s = String(entry);
+        const hash = s.indexOf("#");
+
+        if (hash === -1) return s;
+
+        const parts = s
+            .slice(hash + 1)
+            .split("&")
+            .map(part => part.trim())
+            .filter(Boolean)
+            .filter(part => part.includes("=") || refValid(part));
+
+        if (parts.length > 0) return s.slice(0, hash) + "#" + parts.join("&");
+
+        return s.slice(0, hash) + "#RULES";
+    };
+
+    const deriveSubDNS = rawDNS => {
+        const subDNS = asPlainObject(rawDNS);
+
+        const subPSN = stringList(
+            subDNS["proxy-server-nameserver"]
+        ).map(stripDanglingRef);
+
+        const subNS = stringList(subDNS.nameserver).map(
+            stripDanglingRef
+        );
+
+        const subPolicy = Object.assign(
+            {},
+            asPlainObject(subDNS["nameserver-policy"])
+        );
+
+        // fake-ip-filter 仅在缺省 / blacklist 模式下继承（whitelist / rule 语义相反）
+        const modeRaw = subDNS["fake-ip-filter-mode"];
+        const mode =
+            typeof modeRaw === "string"
+                ? modeRaw.trim().toLowerCase()
+                : "";
+
+        const subFilter =
+            mode === "" || mode === "blacklist"
+                ? stringList(subDNS["fake-ip-filter"]).filter(
+                      item => !isDanglingKey(item)
+                  )
+                : [];
+
+        // nameserver-policy 逐键清洗：通吃键会架空分流、指向规则集 / geo 的键会报错，均丢弃；值清洗悬空引用
+        for (const key of Object.keys(subPolicy)) {
+            if (
+                key === "+." ||
+                key === "*" ||
+                key === "+" ||
+                isDanglingKey(key)
+            ) {
+                delete subPolicy[key];
+                continue;
+            }
+
+            subPolicy[key] = stringList(subPolicy[key]).map(
+                stripDanglingRef
+            );
+        }
+
+        // proxy-server-nameserver-policy：rule-set / geosite / geoip 键丢弃，其余保留
+        const rawPSNPolicy = asPlainObject(
+            subDNS["proxy-server-nameserver-policy"]
+        );
+        const subPSNPolicy = {};
+
+        for (const key of Object.keys(rawPSNPolicy)) {
+            if (isDanglingKey(key)) continue;
+
+            subPSNPolicy[key] = stringList(rawPSNPolicy[key]).map(
+                stripDanglingRef
+            );
+        }
+
+        // 节点域名解析：订阅显式设置了 proxy-server-nameserver 就独占使用（连同其 policy）；
+        // 未设置（或清洗后为空）则用 PROXY_SERVER_DNS。不从订阅的 nameserver / fallback 迁移：
+        // 那是普通域名解析用的，常含海外或经代理的 DNS，拿来解析节点域名可能循环或被污染
+        const subPSNClean = [
+            ...new Set(subPSN.map(stripProxyRefs).filter(Boolean))
+        ];
+        const psnExplicit = subPSNClean.length > 0;
+
+        return {
+            subDNS,
+            subNS,
+            subPolicy,
+            subFilter,
+            proxyServerNameserver: psnExplicit
+                ? subPSNClean
+                : [...PROXY_SERVER_DNS],
+            proxyServerNameserverPolicy: psnExplicit
+                ? stripProxyRefsPolicy(subPSNPolicy)
+                : undefined
+        };
+    };
+
+    let dnsInfo;
+
+    try {
+        const rawDNS = params.dns;
+
+        if (
+            rawDNS !== undefined &&
+            rawDNS !== null &&
+            !isPlainObject(rawDNS)
+        ) {
+            throw new Error("dns 字段不是对象");
+        }
+
+        dnsInfo = deriveSubDNS(rawDNS);
+    } catch (error) {
+        warnLog(
+            "[Clash_rule.js] 读取订阅 DNS 时出错（" +
+                (error && error.message
+                    ? error.message
+                    : String(error)) +
+                "），已放弃订阅 DNS，改用脚本默认配置。"
+        );
+
+        dnsInfo = deriveSubDNS(null);
+    }
+
+    const {
+        subDNS,
+        subNS,
+        subPolicy,
+        subFilter,
+        proxyServerNameserver,
+        proxyServerNameserverPolicy
+    } = dnsInfo;
+
+    // DNS 层 IPv6 与全局 IPv6 开关一致
+    const dnsIPv6 = ipv6Enabled;
+
+    // 自定义域名的 DNS：代理域名用海外 DoH（经代理出站），直连域名用国内 DoH
+    const customDnsPolicy = {};
+
+    cleanDomains(CUSTOM_PROXY).forEach(domain => {
+        customDnsPolicy["+." + domain] = [...OVERSEAS_DNS_DOH];
+    });
+
+    cleanDomains(CUSTOM_DIRECT).forEach(domain => {
+        customDnsPolicy["+." + domain] = [...CN_DNS_DOH];
+    });
+
+    // 节点自身依赖的域名（ECH 查询名、SNI / servername、WS / XHTTP Host）：要在代理就绪前解析，
+    // 走国内 DoH，避免"需要节点才能解析节点"的循环
+    const nodeDomainPolicy = {};
+
+    // 固定域名：不依赖脚本能否看见节点（provider 订阅同样生效）
+    FIXED_NODE_DOMAINS.forEach(value => {
+        if (isDomainName(value)) {
+            nodeDomainPolicy[value.toLowerCase()] = [...CN_DNS_DOH];
+        }
+    });
+
+    params.proxies.forEach(proxy => {
+        const ws = isPlainObject(proxy["ws-opts"]) ? proxy["ws-opts"] : {};
+        const headers = isPlainObject(ws.headers) ? ws.headers : {};
+        const xhttp = isPlainObject(proxy["xhttp-opts"]) ? proxy["xhttp-opts"] : {};
+        const ech = isPlainObject(proxy["ech-opts"]) ? proxy["ech-opts"] : {};
+
+        [
+            proxy.servername,
+            proxy.sni,
+            ech["query-server-name"],
+            headers.Host,
+            headers.host,
+            xhttp.host
+        ].forEach(value => {
+            if (isDomainName(value)) {
+                nodeDomainPolicy[value.toLowerCase()] = [...CN_DNS_DOH];
+            }
+        });
+    });
+
+    params.dns = {
+        enable: true,
+        // 固定回环 + 非特权端口：避免订阅常见的 0.0.0.0:53 被系统 DNS 占用而启动失败；
+        // 要给局域网设备当 DNS 用时改这一行，并自行确认端口与防火墙
+        listen: "127.0.0.1:1053",
+        ipv6: dnsIPv6,
+        "prefer-h3": PREFER_H3,
+        "enhanced-mode": "fake-ip",
+        "fake-ip-range": "198.18.0.1/16",
+        // IPv6 fake-ip 段（仅 DNS 启用 IPv6 时输出）
+        ...(dnsIPv6
+            ? { "fake-ip-range6": "fdfe:dcba:9876::/64" }
+            : {}),
+        "cache-algorithm": "arc",
+        "fake-ip-filter-mode": "blacklist",
+        // DNS 出站按路由规则走：#RULES 才能生效，海外 DoH 经代理、国内 DoH 直连，是防泄漏的关键
+        "respect-rules": true,
+        // 保留订阅自带的 hosts
+        "use-hosts":
+            typeof subDNS["use-hosts"] === "boolean"
+                ? subDNS["use-hosts"]
+                : true,
+        "use-system-hosts":
+            typeof subDNS["use-system-hosts"] === "boolean"
+                ? subDNS["use-system-hosts"]
+                : true,
+        ...(isPlainObject(subDNS.hosts)
+            ? { hosts: subDNS.hosts }
+            : {}),
+        // 需要真实 IP 的域名：局域网、NTP、连通性探测、游戏平台（对时拿到假地址会失败，连带影响 TLS 校验），
+        // 另含 STUN 通配与脚本规则集兜底
+        "fake-ip-filter": [
+            ...new Set([
+                "+.lan",
+                "+.local",
+                "localhost.ptlogin2.qq.com",
+                "+.msftconnecttest.com",
+                "+.msftncsi.com",
+                "+.ntp.org",
+                "+.xboxlive.com",
+                "+.playstation.net",
+                "+.xbox.com",
+                "xbox.ipv6.microsoft.com",
+                "+.srv.nintendo.net",
+                "time.windows.com",
+                "time.apple.com",
+                "+.stun.*",
+                "+.stun.*.*",
+                "+.stun.*.*.*",
+                "+.stun.*.*.*.*",
+                "rule-set:cn-domain",
+                "rule-set:private-domain",
+                "rule-set:fakeip-filter",
+                ...subFilter
+            ])
+        ],
+        // 引导 DNS：只解析其它 DoH 服务器的域名；明文 IP 最快且不依赖证书校验
+        "default-nameserver": [...CN_DNS_PLAIN],
+        // 节点域名解析：订阅显式设置则独占其值，否则用 PROXY_SERVER_DNS
+        "proxy-server-nameserver": proxyServerNameserver,
+        ...(proxyServerNameserverPolicy &&
+        Object.keys(proxyServerNameserverPolicy).length > 0
+            ? {
+                  "proxy-server-nameserver-policy":
+                      proxyServerNameserverPolicy
+              }
+            : {}),
+        // 海外域名：默认用海外 DoH，#RULES 按路由规则出站，查询不经本地运营商；
+        // TRUST_SUB_NAMESERVER=true 时改用订阅自带的 nameserver
+        nameserver:
+            TRUST_SUB_NAMESERVER && subNS.length > 0
+                ? [...new Set(subNS)]
+                : [...OVERSEAS_DNS_DOH],
+        // DIRECT 命中且未被 policy 覆盖的域名（冷门国内站点）用国内明文 DNS：
+        // 只是国内域名，隐私影响小，且比 DoH 首次解析更快
+        "direct-nameserver": [...CN_DNS_PLAIN],
+        // DIRECT 命中的域名先走 nameserver-policy，未覆盖才落到 direct-nameserver
+        "direct-nameserver-follow-policy": true,
+        // 顺序即优先级：自定义域名与节点域名必须排在 rule-set:cn-domain 之前，
+        // 否则 bilibili.tv 这类被 cn 列表收录的域名仍会先被国内 DNS 解析
+        "nameserver-policy": Object.assign(
+            {},
+            subPolicy,
+            nodeDomainPolicy,
+            customDnsPolicy,
+            {
+                "rule-set:private-domain": ["system://"],
+                "rule-set:ads-domain": ["rcode://name_error"],
+                "rule-set:cn-domain": [...CN_DNS_DOH]
+            }
+        )
+    };
+
+    // ── 5. 规则集 ──
+    // MetaCubeX 官方拆分库，全 mrs 格式
+    const domainProvider = name => ({
+        type: "http",
+        behavior: "domain",
+        format: "mrs",
+        url: `${RS_BASE}/geosite/${name}.mrs`,
+        path: `./ruleset/geosite-${name}.mrs`,
+        interval: RS_INTERVAL
+    });
+
+    const ipProvider = name => ({
+        type: "http",
+        behavior: "ipcidr",
+        format: "mrs",
+        url: `${RS_BASE}/geoip/${name}.mrs`,
+        path: `./ruleset/geoip-${name}.mrs`,
+        interval: RS_INTERVAL
+    });
+
+    // 其它来源的规则集（666OS / AWAvenue / wwqgtxx）：自行指定地址、行为、格式与缓存文件名
+    const extraProvider = (url, behavior, format, file) => ({
+        type: "http",
+        behavior,
+        format,
+        url,
+        path: `./ruleset/${file}`,
+        interval: RS_INTERVAL
+    });
+
+    // 引用名 → 官方分类名
+    const DOMAIN_SETS = {
+        "private-domain": "private",
+        "ads-domain": "category-ads-all",
+        "youtube-domain": "youtube",
+        "twitch-domain": "twitch",
+        "twitter-domain": "twitter",
+        "tiktok-domain": "tiktok",
+        "telegram-domain": "telegram",
+        "github-domain": "github",
+        "ai-domain": "category-ai-!cn",
+        "netflix-domain": "netflix",
+        "disney-domain": "disney",
+        "primevideo-domain": "primevideo",
+        "appletv-domain": "apple-tvplus",
+        "hbo-domain": "hbo",
+        "spotify-domain": "spotify",
+        "google-domain": "google",
+        "apple-domain": "apple",
+        "microsoft-domain": "microsoft",
+        "proxy-domain": "geolocation-!cn",
+        "cn-domain": "cn"
+    };
+
+    // BT：公共 tracker + PT 站点域名（仅 BT_DIRECT 开启时创建）
+    if (BT_DIRECT) {
+        DOMAIN_SETS["bt-tracker-domain"] = "category-public-tracker";
+        DOMAIN_SETS["bt-pt-domain"] = "category-pt";
+    }
+
+    const IP_SETS = {
+        "private-ip": "private",
+        "telegram-ip": "telegram",
+        "cn-ip": "cn"
+    };
+
+    // 清空重建（订阅原有的 rule-providers 不保留）
+    params["rule-providers"] = {};
+
+    Object.keys(DOMAIN_SETS).forEach(key => {
+        params["rule-providers"][key] = domainProvider(DOMAIN_SETS[key]);
+    });
+
+    Object.keys(IP_SETS).forEach(key => {
+        params["rule-providers"][key] = ipProvider(IP_SETS[key]);
+    });
+
+    // 社区维护的 fake-ip 豁免清单，供 dns.fake-ip-filter 引用
+    params["rule-providers"]["fakeip-filter"] = extraProvider(
+        RS_FAKEIP_FILTER,
+        "domain",
+        "mrs",
+        "fakeip-filter.mrs"
+    );
+
+    // 可选规则集：开关关闭则不创建，规则段里也不生成对应规则
+    if (DOWNLOAD_DIRECT) {
+        params["rule-providers"]["download-domain"] = extraProvider(
+            `${RS_666OS}/domain/Download.mrs`,
+            "domain",
+            "mrs",
+            "666os-download.mrs"
+        );
+    }
+
+    if (BLOCK_TRACKING) {
+        params["rule-providers"]["tracking-domain"] = extraProvider(
+            `${RS_666OS}/domain/Tracking.mrs`,
+            "domain",
+            "mrs",
+            "666os-tracking.mrs"
+        );
+    }
+
+    if (BLOCK_AWAVENUE) {
+        params["rule-providers"]["awavenue-ads"] = extraProvider(
+            `${RS_AWAVENUE}/AWAvenue-Ads-Rule-Clash.yaml`,
+            "domain",
+            "yaml",
+            "awavenue-ads.yaml"
+        );
+    }
+
+    // ── 6. 策略组 ──
+    const groups = [];
+
+    // 节点选择：唯一顶层入口。顺序：自动选择 → 各地区组 → 手动选择 → 家宽出口 → 直连连接
+    groups.push({
+        name: PROXY_GROUP,
+        type: "select",
+        icon: "https://cdn.jsdmirror.com/gh/Koolson/Qure@63be653774a6a83cd8e475a7b65f1ed68b9a0093/IconSet/Color/Proxy.png",
+        proxies: [
+            AUTO_GROUP,
+            ...regionLabels,
+            MANUAL_ENTRY,
+            ...(hasHomeNodes ? [HOME_GROUP] : []),
+            DIRECT_GROUP
+        ]
+    });
+
+    // 自动选择：不分国家，全部可用节点里选延迟最低的（隐藏，只作为"节点选择"的成员显示）
+    groups.push({
+        name: AUTO_GROUP,
+        type: "url-test",
+        hidden: true,
+        icon: "https://cdn.jsdmirror.com/gh/Koolson/Qure@63be653774a6a83cd8e475a7b65f1ed68b9a0093/IconSet/Color/Auto.png",
+        "include-all": true,
+        "exclude-type": NODE_EXCLUDE_TYPE,
+        "exclude-filter": excludeFilter,
+        "empty-fallback": "REJECT",
+        url: TEST_URL_PROXY,
+        interval: AUTO_TEST_INTERVAL,
+        tolerance: AUTO_TEST_TOLERANCE,
+        lazy: true,
+        timeout: 8000,
+        "max-failed-times": 5,
+        "expected-status": 204
+    });
+
+    // 手动选择：收全部普通节点（排除 direct / reject / 家宽 与信息类节点）
+    groups.push({
+        name: MANUAL_GROUP,
+        type: "select",
+        icon: "https://cdn.jsdmirror.com/gh/Koolson/Qure@63be653774a6a83cd8e475a7b65f1ed68b9a0093/IconSet/Color/Static.png",
+        "include-all": true,
+        "exclude-type": NODE_EXCLUDE_TYPE,
+        "exclude-filter": excludeFilter,
+        "empty-fallback": "REJECT"
+    });
+
+    // 手动选择入口：隐藏，只在"节点选择"里显示为带图标的卡片，指向"手动选择"
+    groups.push({
+        name: MANUAL_ENTRY,
+        type: "select",
+        hidden: true,
+        icon: "https://cdn.jsdmirror.com/gh/Koolson/Qure@63be653774a6a83cd8e475a7b65f1ed68b9a0093/IconSet/Color/Static.png",
+        proxies: [MANUAL_GROUP]
+    });
+
+    // 直连组：隐藏，仅供内部选择引用，成员是内建 DIRECT
+    groups.push({
+        name: DIRECT_GROUP,
+        type: "select",
+        hidden: true,
+        icon: "https://cdn.jsdmirror.com/gh/Koolson/Qure@63be653774a6a83cd8e475a7b65f1ed68b9a0093/IconSet/Color/Direct.png",
+        proxies: ["DIRECT"]
+    });
+
+    // 家宽相关组（仅订阅里存在家宽节点时创建）
+    if (hasHomeNodes) {
+        // 隧道前置：家宽 OpenVPN 节点通过 dialer-proxy 经此组拨号（链路：本机 → 前置节点 → 家宽节点）。
+        // 有 FRONT_NODES 时：可见的 select 组，第一个选项「前置自动」，后面是各前置节点，可手动指定；
+        // 没有 FRONT_NODES 时：回退为全部非家宽普通节点自动选延迟最低（必须排除 openvpn，否则会依赖自己形成循环）
+        if (frontNames.length > 0) {
+            groups.push({
+                name: FRONT_AUTO,
+                type: "url-test",
+                hidden: true,
+                proxies: [...frontNames],
+                "empty-fallback": "REJECT",
+                url: TEST_URL_PROXY,
+                interval: AUTO_TEST_INTERVAL,
+                tolerance: AUTO_TEST_TOLERANCE,
+                lazy: true,
+                timeout: 8000,
+                "max-failed-times": 5,
+                "expected-status": 204
+            });
+
+            groups.push({
+                name: TUNNEL_GROUP,
+                type: "select",
+                icon: "https://cdn.jsdmirror.com/gh/Koolson/Qure@master/IconSet/Color/SSID.png",
+                proxies: [FRONT_AUTO, ...frontNames]
+            });
+        } else {
+            groups.push({
+                name: TUNNEL_GROUP,
+                type: "url-test",
+                hidden: true,
+                "include-all": true,
+                "exclude-type": NODE_EXCLUDE_TYPE,
+                "exclude-filter": excludeFilter,
+                "empty-fallback": "REJECT",
+                url: TEST_URL_PROXY,
+                interval: 300,
+                tolerance: AUTO_TEST_TOLERANCE,
+                lazy: true,
+                timeout: 8000,
+                "max-failed-times": 5,
+                "expected-status": 204
+            });
+        }
+
+        // 家宽自动：在全部家宽节点里自动选延迟最低的（隐藏，只作为"家宽出口"的成员）
+        groups.push({
+            name: HOME_AUTO,
+            type: "url-test",
+            hidden: true,
+            "include-all": true,
+            filter: HOME_FILTER,
+            "empty-fallback": "REJECT",
+            url: TEST_URL_PROXY,
+            interval: HOME_TEST_INTERVAL,
+            tolerance: HOME_TEST_TOLERANCE,
+            lazy: true,
+            timeout: 8000,
+            "max-failed-times": 5,
+            "expected-status": 204
+        });
+
+        // 家宽出口：默认"家宽自动"，也可手动指定某个家宽节点（落地）
+        groups.push({
+            name: HOME_GROUP,
+            type: "select",
+            icon: "https://cdn.jsdmirror.com/gh/Koolson/Qure@master/IconSet/Color/Back.png",
+            proxies: [HOME_AUTO],
+            "include-all": true,
+            filter: HOME_FILTER,
+            "empty-fallback": "REJECT"
+        });
+    }
+
+    // 应用组：默认选中"节点选择"；direct 组（Microsoft）把"直连连接"排第一，默认直连
+    const homeEntry = hasHomeNodes ? [HOME_GROUP] : [];
+    const appProxiesList = [
+        PROXY_GROUP,
+        DIRECT_GROUP,
+        ...homeEntry,
+        ...regionLabels
+    ];
+    const appProxiesDirectFirst = [
+        DIRECT_GROUP,
+        PROXY_GROUP,
+        ...homeEntry,
+        ...regionLabels
+    ];
+
+    // proxies 给出切换目标，include-all 再加入全部普通节点，两者缺一不可
+    apps.forEach(app => {
+        const icon = app.icon.startsWith("http")
+            ? app.icon
+            : `https://cdn.jsdmirror.com/gh/shindgew/WHATSINStash@main/icon/${app.icon}`;
+
+        groups.push({
+            name: app.name,
+            type: "select",
+            icon,
+            proxies: app.direct ? appProxiesDirectFirst : appProxiesList,
+            "include-all": true,
+            "exclude-type": NODE_EXCLUDE_TYPE,
+            "exclude-filter": excludeFilter
+        });
+    });
+
+    // 地区测速组（全隐藏）：本地订阅且已统一命名时按"国旗 简称"前缀精确匹配，否则用地区正则
+    activeRegions.forEach(region => {
+        groups.push({
+            name: region.label,
+            type: "url-test",
+            hidden: true,
+            icon: region.icon,
+            "include-all": true,
+            "exclude-type": NODE_EXCLUDE_TYPE,
+            filter: anchoredGroups
+                ? "(?i)^" + flagOf(region.name) + " " + region.name + "( |$)"
+                : region.regex,
+            "exclude-filter": excludeFilter,
+            // provider 订阅下可能一个节点都匹配不上，用 REJECT 兜底
+            "empty-fallback": "REJECT",
+            url: TEST_URL_PROXY,
+            interval: AUTO_TEST_INTERVAL,
+            tolerance: AUTO_TEST_TOLERANCE,
+            lazy: true,
+            timeout: 8000,
+            "max-failed-times": 5,
+            "expected-status": 204
+        });
+    });
+
+    // 本地订阅下全部节点被 excludeFilter 过滤时，"手动选择"将为空并回落 REJECT（静默断网），留一条日志提示；
+    // provider 订阅的节点脚本不可见，无法检查
+    if (!subHasProviders) {
+        const usableCount = allProxies.filter(
+            proxy => !excludeRe.test(proxy.name)
+        ).length;
+
+        if (usableCount === 0) {
+            warnLog(
+                "[Clash_rule.js] 订阅节点全部被 excludeFilter 过滤，「手动选择」组将为空并回落 REJECT，网络将不可用；请检查 excludeFilter 或节点命名。"
+            );
+        }
+    }
+
+    params["proxy-groups"] = groups;
+
+    // ── 7. 规则 ──
+    // 自定义域名规则
+    const buildCustomRules = (list, policy) =>
+        cleanDomains(list).map(
+            domain => `DOMAIN-SUFFIX,${domain},${policy}`
+        );
+
+    // 自上而下先命中先决定，分五层：
+    //   1. 私网 / 广告 / 追踪
+    //   2. 传输层（NTP、QUIC / STUN 阻断、BT 直连），须排在应用分流前
+    //   3. 自定义域名（优先于所有规则集）
+    //   4. 应用分流（下载站直连排在通用代理域名之前）
+    //   5. 国内直连 → MATCH 兜底
+    // cn-domain 排在 Google / Apple / Microsoft 之后，避免其国内 CDN 域名被直连截胡
+    params.rules = [
+        "RULE-SET,private-domain,DIRECT",
+        "RULE-SET,private-ip,DIRECT,no-resolve",
+        "RULE-SET,ads-domain,REJECT",
+        ...(BLOCK_TRACKING ? ["RULE-SET,tracking-domain,REJECT"] : []),
+        ...(BLOCK_AWAVENUE ? ["RULE-SET,awavenue-ads,REJECT"] : []),
+        // NTP 直连：很多节点丢弃 UDP 123，时间偏差会连带导致全局 TLS 校验失败
+        "AND,((DST-PORT,123),(NETWORK,UDP)),DIRECT",
+        ...(BLOCK_QUIC
+            ? ["AND,((DST-PORT,443),(NETWORK,UDP)),REJECT"]
+            : []),
+        // STUN：3478 / 3479 标准端口，19302-19309 为 Google STUN
+        ...(BLOCK_STUN
+            ? [
+                  "AND,((NETWORK,UDP),(DST-PORT,3478/3479/19302-19309)),REJECT"
+              ]
+            : []),
+        ...(BT_DIRECT
+            ? [
+                  "RULE-SET,bt-tracker-domain,DIRECT",
+                  "RULE-SET,bt-pt-domain,DIRECT"
+              ]
+            : []),
+
+        // 自定义域名：直连在前、代理在后，同一域名同时出现时以直连为准
+        ...buildCustomRules(CUSTOM_DIRECT, "DIRECT"),
+        ...buildCustomRules(CUSTOM_PROXY, PROXY_GROUP),
+
+        "RULE-SET,youtube-domain,YouTube",
+        "RULE-SET,twitch-domain,Twitch",
+        "RULE-SET,twitter-domain,X",
+        "RULE-SET,tiktok-domain,TikTok",
+        "RULE-SET,telegram-domain,Telegram",
+        "RULE-SET,telegram-ip,Telegram,no-resolve",
+        "RULE-SET,ai-domain,AI",
+        "RULE-SET,github-domain,GitHub",
+
+        "RULE-SET,netflix-domain,TV",
+        "RULE-SET,disney-domain,TV",
+        "RULE-SET,primevideo-domain,TV",
+        "RULE-SET,appletv-domain,TV",
+        "RULE-SET,hbo-domain,TV",
+        "RULE-SET,spotify-domain,Spotify",
+
+        "RULE-SET,google-domain,Google",
+        "RULE-SET,apple-domain,Apple",
+        "RULE-SET,microsoft-domain,Microsoft",
+
+        ...(DOWNLOAD_DIRECT ? ["RULE-SET,download-domain,DIRECT"] : []),
+
+        `RULE-SET,proxy-domain,${PROXY_GROUP}`,
+
+        "RULE-SET,cn-domain,DIRECT",
+        // no-resolve：避免未收录站点在进入 MATCH 前被海外 nameserver 解析而引入延迟
+        "RULE-SET,cn-ip,DIRECT,no-resolve",
+
+        `MATCH,${PROXY_GROUP}`
+    ];
+
+    return params;
+}
+
+if (typeof module !== "undefined") {
+    module.exports = main;
+    module.exports.main = main;
+}

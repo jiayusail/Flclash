@@ -60,7 +60,7 @@ const PREFER_H3 = false;          // DoH 是否并发尝试 HTTP/3：UDP 被限�
 
 // 测速组参数（地区组与自动选择组共用）
 const AUTO_TEST_INTERVAL = 300;   // 自动测速间隔（秒）
-const AUTO_TEST_TOLERANCE = 30;   // 容差（ms）：新节点比当前节点快超过该值才切换
+const AUTO_TEST_TOLERANCE = 50;   // 容差（ms）：新节点比当前节点快超过该值才切换
 
 // 固定组名（改名只需改这里，规则、DNS 校验、各组引用同步生效）。
 // 非隐藏组会作为顶部导航标签显示，所以"手动选择"拆成两个组：
@@ -951,7 +951,7 @@ function main(params) {
                     enable: true,
                     url: TEST_URL_PROXY,
                     interval: 300,
-                    timeout: 5000,
+                    timeout: 8000,
                     "expected-status": 204,
                     lazy: true
                 },
@@ -1474,7 +1474,7 @@ function main(params) {
         interval: AUTO_TEST_INTERVAL,
         tolerance: AUTO_TEST_TOLERANCE,
         lazy: true,
-        timeout: 5000,
+        timeout: 8000,
         "max-failed-times": 5,
         "expected-status": 204
     });
@@ -1548,7 +1548,7 @@ function main(params) {
             interval: AUTO_TEST_INTERVAL,
             tolerance: AUTO_TEST_TOLERANCE,
             lazy: true,
-            timeout: 5000,
+            timeout: 8000,
             "max-failed-times": 5,
             "expected-status": 204
         });

@@ -1,4 +1,4 @@
-// Clash_rule.js V6.6 家宽适配版（无 Proxy IP）
+// Clash_rule.js V6.5 家宽适配版（无 Proxy IP）
 // mihomo / FlClash 覆写脚本，主要功能：
 //   · 节点统一命名为"国旗 简称 原名"，按国家地区自动建测速组，另有全部节点自动选择与手动选择
 //   · DNS：fake-ip + 国内外分流；海外域名经代理用海外 DoH 解析，节点自身域名固定走国内 DoH；
@@ -57,7 +57,7 @@ const PREFER_H3 = false;          // DoH 是否并发尝试 HTTP/3：UDP 被限�
 
 // 测速组参数（地区组与自动选择组共用）
 const AUTO_TEST_INTERVAL = 300;   // 自动测速间隔（秒）
-const AUTO_TEST_TOLERANCE = 30;   // 容差（ms）：新节点比当前节点快超过该值才切换
+const AUTO_TEST_TOLERANCE = 50;   // 容差（ms）：新节点比当前节点快超过该值才切换
 
 // 家宽测速参数：OpenVPN 经隧道拨号，握手慢，间隔放长、容差放大
 const HOME_TEST_INTERVAL = 600;
@@ -878,7 +878,7 @@ function main(params) {
                     enable: true,
                     url: TEST_URL_PROXY,
                     interval: 300,
-                    timeout: 5000,
+                    timeout: 8000,
                     "expected-status": 204,
                     lazy: true
                 },
@@ -1408,7 +1408,7 @@ function main(params) {
         interval: AUTO_TEST_INTERVAL,
         tolerance: AUTO_TEST_TOLERANCE,
         lazy: true,
-        timeout: 5000,
+        timeout: 8000,
         "max-failed-times": 5,
         "expected-status": 204
     });
@@ -1459,7 +1459,7 @@ function main(params) {
             interval: 300,
             tolerance: AUTO_TEST_TOLERANCE,
             lazy: true,
-            timeout: 5000,
+            timeout: 8000,
             "max-failed-times": 5,
             "expected-status": 204
         });
@@ -1543,7 +1543,7 @@ function main(params) {
             interval: AUTO_TEST_INTERVAL,
             tolerance: AUTO_TEST_TOLERANCE,
             lazy: true,
-            timeout: 5000,
+            timeout: 8000,
             "max-failed-times": 5,
             "expected-status": 204
         });

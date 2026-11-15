@@ -319,7 +319,7 @@ const apps = [
     { name: "Apple", icon: "apple.png" },
     {
         name: "GitHub",
-        icon: "https://cdn.jsdmirror.com/gh/kanwox/Proxy-Rule@main/assets/github.png"
+        icon: "https://gh-proxy.com/https://raw.githubusercontent.com/lige47/QuanX-icon-rule/main/icon/04ProxySoft/github(1).png"
     },
     { name: "Google", icon: "google.png" },
     {

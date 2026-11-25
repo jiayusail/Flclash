@@ -11,6 +11,12 @@
  *
  * 重要：分组是写进 Sing-Box 配置的 selector / urltest；SFA 的图形界面是否
  *       像 FlClash 一样展示分组取决于客户端版本。规则本身会按这些 tag 分流。
+ *
+ * 可调项（文件顶部）：
+ *   RULE_PROFILE = "full" | "lite"     完整 12 应用组 / 精简 5 应用组
+ *   RULE_MIRROR  = "jsdelivr" | "fastly" | "jsdmirror"
+ *   INCLUDE_ALL_NODES_IN_APPS = true | false
+ *   DOWNLOAD_VIA_DIRECT = false | true
  */
 
 const PROXY_GROUP = "节点选择";
@@ -23,12 +29,26 @@ const REGION_MIN_NODES = 2;        // 同地区至少几个节点才建地区组
 const BLOCK_QUIC = true;           // UDP 443 拒绝（迫使浏览器走 TCP）
 const BLOCK_STUN = true;           // STUN 端口拒绝（WebRTC 防泄漏）
 const BT_DIRECT = true;            // BT tracker / PT 域名直连
-const DOWNLOAD_VIA_DIRECT = false; // 规则集下载走「节点选择」；true 则直连 jsDelivr（国内常被 RST）
+const DOWNLOAD_VIA_DIRECT = false; // 规则集下载走「节点选择」；true 则直连（国内常被 RST）
 const RULESET_DIRECT_TAG = "ruleset-direct";
 
-// jsDelivr 上的 Sing-Box 规则集（.srs 二进制格式，不是 mihomo 的 .mrs）
-const RULE_BASE = "https://cdn.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/";
-const IP_BASE = "https://cdn.jsdelivr.net/gh/SagerNet/sing-geoip@rule-set/";
+// full：12 个应用组；lite：只保留 AI / GitHub / Google / Telegram / YouTube，
+// 规则集和启动下载量更少，适合网络不稳或只想要核心分流的场景。
+const RULE_PROFILE = "full";       // "full" | "lite"
+// 规则集镜像：jsdelivr / fastly / jsdmirror；启动失败时可以先换这里再试。
+const RULE_MIRROR = "jsdelivr";
+const INCLUDE_ALL_NODES_IN_APPS = true; // true：应用组里列出每个节点；false：只放组，配置更轻
+
+const RULE_MIRROR_BASES = {
+    jsdelivr: "https://cdn.jsdelivr.net/gh/SagerNet/",
+    fastly: "https://fastly.jsdelivr.net/gh/SagerNet/",
+    jsdmirror: "https://cdn.jsdmirror.com/gh/SagerNet/"
+};
+const RULE_MIRROR_BASE = RULE_MIRROR_BASES[RULE_MIRROR] || RULE_MIRROR_BASES.jsdelivr;
+
+// Sing-Box 规则集（.srs 二进制格式，不是 mihomo 的 .mrs）
+const RULE_BASE = RULE_MIRROR_BASE + "sing-geosite@rule-set/";
+const IP_BASE = RULE_MIRROR_BASE + "sing-geoip@rule-set/";
 const HTTP_CLIENT_TAG = "cflink-ruleset-download";
 
 const CUSTOM_PROXY = ["bilibili.tv", "biliintl.com", "bilicdn1.com"];
@@ -51,8 +71,14 @@ const APP_RULES = [
 ];
 
 const APP_GROUP_NAMES = APP_RULES.map(item => item[0]);
-// 应用组按英文名字母排序，和 FlClash 截图里的顺序一致。
-APP_RULES.sort((a, b) => a[0].localeCompare(b[0], "en"));
+const LITE_APP_GROUP_NAMES = new Set(["AI", "GitHub", "Google", "Telegram", "YouTube"]);
+const ACTIVE_APP_RULES = RULE_PROFILE === "lite"
+    ? APP_RULES.filter(([name]) => LITE_APP_GROUP_NAMES.has(name))
+    : APP_RULES;
+// 只用于 SFA Groups 的展示顺序；规则优先级仍按 ACTIVE_APP_RULES 原顺序
+// （YouTube 在 Google 前，避免 YouTube 域名被 Google 规则截走）。
+const APP_GROUPS_ALPHA = ACTIVE_APP_RULES.slice()
+    .sort((a, b) => a[0].localeCompare(b[0], "en"));
 
 // 地区表：代码 / 中文名 / 匹配节点 tag 的正则（只用于建地区组，不改节点名）
 const REGIONS = [
@@ -181,16 +207,16 @@ function main(config) {
     });
 
     const regionGroups = activeRegions.map(item => item.label);
-    // 应用组把每个节点都列进去（对应 FlClash 的 include-all），这样在 SFA 里
-    // 展开任一应用组就能直接选单个节点，而不是只能选几个固定模板。
+    // 应用组按开关决定是否把每个节点都列进去（对应 FlClash 的 include-all）。
+    const appNodeMembers = INCLUDE_ALL_NODES_IN_APPS ? nodeTags : [];
     const appMembers = [
-        PROXY_GROUP, DIRECT_GROUP, ...regionGroups, MANUAL_GROUP, ...nodeTags
+        PROXY_GROUP, DIRECT_GROUP, ...regionGroups, MANUAL_GROUP, ...appNodeMembers
     ];
     const appMembersDirectFirst = [
-        DIRECT_GROUP, PROXY_GROUP, ...regionGroups, MANUAL_GROUP, ...nodeTags
+        DIRECT_GROUP, PROXY_GROUP, ...regionGroups, MANUAL_GROUP, ...appNodeMembers
     ];
 
-    APP_RULES.forEach(([name]) => {
+    ACTIVE_APP_RULES.forEach(([name]) => {
         const members = name === "Microsoft"
             ? appMembersDirectFirst
             : appMembers;
@@ -219,7 +245,7 @@ function main(config) {
     const orderedGroups = [
         groupByTag.get(PROXY_GROUP),
         groupByTag.get(MANUAL_GROUP),
-        ...APP_RULES.map(([name]) => groupByTag.get(name)),
+        ...APP_GROUPS_ALPHA.map(([name]) => groupByTag.get(name)),
         groupByTag.get(AUTO_GROUP),
         ...activeRegions.map(item => groupByTag.get(item.label)),
         groupByTag.get(DIRECT_GROUP)
@@ -248,6 +274,7 @@ function main(config) {
                 tag,
                 format: "binary",
                 url: RULE_BASE + tag + ".srs",
+                update_interval: "168h",
                 http_client: HTTP_CLIENT_TAG
             });
         }
@@ -262,6 +289,7 @@ function main(config) {
                 tag,
                 format: "binary",
                 url: IP_BASE + tag + ".srs",
+                update_interval: "168h",
                 http_client: HTTP_CLIENT_TAG
             });
         }
@@ -315,7 +343,7 @@ function main(config) {
         outbound: PROXY_GROUP
     });
 
-    APP_RULES.forEach(([group, sets]) => {
+    ACTIVE_APP_RULES.forEach(([group, sets]) => {
         rules.push({
             rule_set: sets.map(useSet),
             action: "route",

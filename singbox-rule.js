@@ -24,6 +24,7 @@ const BLOCK_QUIC = true;           // UDP 443 拒绝（迫使浏览器走 TCP）
 const BLOCK_STUN = true;           // STUN 端口拒绝（WebRTC 防泄漏）
 const BT_DIRECT = true;            // BT tracker / PT 域名直连
 const DOWNLOAD_VIA_DIRECT = true;  // 规则集下载直连；false 则走「节点选择」
+const RULESET_DIRECT_TAG = "ruleset-direct";
 
 // jsDelivr 上的 Sing-Box 规则集（.srs 二进制格式，不是 mihomo 的 .mrs）
 const RULE_BASE = "https://cdn.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/";
@@ -117,6 +118,7 @@ function main(config) {
     // 组名 / 内置 tag 不能被节点占用；只做最小避让，不做改名 / 地区名过滤。
     const reserved = new Set([
         PROXY_GROUP, AUTO_GROUP, MANUAL_GROUP, DIRECT_GROUP, directTag,
+        RULESET_DIRECT_TAG,
         ...APP_GROUP_NAMES,
         ...REGIONS.map(regionLabel)
     ]);
@@ -201,7 +203,17 @@ function main(config) {
         default: nodeTags.length ? AUTO_GROUP : DIRECT_GROUP
     });
 
-    config.outbounds = groups.concat(nodes, [direct]);
+    const rulesetDirect = {
+        type: "direct",
+        tag: RULESET_DIRECT_TAG,
+        // 必须让这个 direct 不是「空 direct」：sing-box 不允许 HTTP client 的 detour
+        // 指向空 direct（会报 "detour to an empty direct outbound makes no sense"）。
+        connect_timeout: "10s"
+    };
+    const finalOutbounds = groups.concat(nodes);
+    if (DOWNLOAD_VIA_DIRECT) finalOutbounds.push(rulesetDirect);
+    finalOutbounds.push(direct);
+    config.outbounds = finalOutbounds;
 
     // ── 规则集：Sing-Box 只认 .srs，mihomo 的 .mrs / yaml 不能直接用 ──
     const ruleSetMap = new Map();
@@ -332,7 +344,7 @@ function main(config) {
         : [];
     clients.push({
         tag: HTTP_CLIENT_TAG,
-        detour: DOWNLOAD_VIA_DIRECT ? directTag : PROXY_GROUP
+        detour: DOWNLOAD_VIA_DIRECT ? RULESET_DIRECT_TAG : PROXY_GROUP
     });
     config.http_clients = clients;
 

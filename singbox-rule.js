@@ -15,7 +15,7 @@
 
 const PROXY_GROUP = "节点选择";
 const AUTO_GROUP = "⚡自动选择";
-const MANUAL_GROUP = "手动选择";
+const MANUAL_GROUP = "✋手动选择";
 const DIRECT_GROUP = "🏠直连连接";
 
 const TEST_URL = "https://www.gstatic.com/generate_204";
@@ -51,6 +51,8 @@ const APP_RULES = [
 ];
 
 const APP_GROUP_NAMES = APP_RULES.map(item => item[0]);
+// 应用组按英文名字母排序，和 FlClash 截图里的顺序一致。
+APP_RULES.sort((a, b) => a[0].localeCompare(b[0], "en"));
 
 // 地区表：代码 / 中文名 / 匹配节点 tag 的正则（只用于建地区组，不改节点名）
 const REGIONS = [
@@ -137,7 +139,8 @@ function main(config) {
         region,
         label: regionLabel(region),
         tags: nodes.filter(node => region[2].test(node.tag)).map(node => node.tag)
-    })).filter(item => item.tags.length >= REGION_MIN_NODES);
+    })).filter(item => item.tags.length >= REGION_MIN_NODES)
+        .sort((a, b) => a.region[0].localeCompare(b.region[0]));
 
     const groups = [];
 
@@ -178,8 +181,14 @@ function main(config) {
     });
 
     const regionGroups = activeRegions.map(item => item.label);
-    const appMembers = [PROXY_GROUP, DIRECT_GROUP, MANUAL_GROUP, ...regionGroups];
-    const appMembersDirectFirst = [DIRECT_GROUP, PROXY_GROUP, MANUAL_GROUP, ...regionGroups];
+    // 应用组把每个节点都列进去（对应 FlClash 的 include-all），这样在 SFA 里
+    // 展开任一应用组就能直接选单个节点，而不是只能选几个固定模板。
+    const appMembers = [
+        PROXY_GROUP, DIRECT_GROUP, ...regionGroups, MANUAL_GROUP, ...nodeTags
+    ];
+    const appMembersDirectFirst = [
+        DIRECT_GROUP, PROXY_GROUP, ...regionGroups, MANUAL_GROUP, ...nodeTags
+    ];
 
     APP_RULES.forEach(([name]) => {
         const members = name === "Microsoft"
@@ -203,6 +212,19 @@ function main(config) {
         default: nodeTags.length ? AUTO_GROUP : DIRECT_GROUP
     });
 
+    // 显示顺序：顶层节点选择 → 手动选择 → 应用组（字母序）→ 自动选择 →
+    // 地区组（代码序）→ 直连连接。Sing-Box 没有 hidden，自动/地区/直连只能
+    // 放到后面，不能像 FlClash 那样真正隐藏。
+    const groupByTag = new Map(groups.map(group => [group.tag, group]));
+    const orderedGroups = [
+        groupByTag.get(PROXY_GROUP),
+        groupByTag.get(MANUAL_GROUP),
+        ...APP_RULES.map(([name]) => groupByTag.get(name)),
+        groupByTag.get(AUTO_GROUP),
+        ...activeRegions.map(item => groupByTag.get(item.label)),
+        groupByTag.get(DIRECT_GROUP)
+    ].filter(Boolean);
+
     const rulesetDirect = {
         type: "direct",
         tag: RULESET_DIRECT_TAG,
@@ -210,7 +232,7 @@ function main(config) {
         // 指向空 direct（会报 "detour to an empty direct outbound makes no sense"）。
         connect_timeout: "10s"
     };
-    const finalOutbounds = groups.concat(nodes);
+    const finalOutbounds = orderedGroups.concat(nodes);
     if (DOWNLOAD_VIA_DIRECT) finalOutbounds.push(rulesetDirect);
     finalOutbounds.push(direct);
     config.outbounds = finalOutbounds;

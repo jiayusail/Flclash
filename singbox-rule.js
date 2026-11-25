@@ -23,7 +23,7 @@ const REGION_MIN_NODES = 2;        // 同地区至少几个节点才建地区组
 const BLOCK_QUIC = true;           // UDP 443 拒绝（迫使浏览器走 TCP）
 const BLOCK_STUN = true;           // STUN 端口拒绝（WebRTC 防泄漏）
 const BT_DIRECT = true;            // BT tracker / PT 域名直连
-const DOWNLOAD_VIA_DIRECT = true;  // 规则集下载直连；false 则走「节点选择」
+const DOWNLOAD_VIA_DIRECT = false; // 规则集下载走「节点选择」；true 则直连 jsDelivr（国内常被 RST）
 const RULESET_DIRECT_TAG = "ruleset-direct";
 
 // jsDelivr 上的 Sing-Box 规则集（.srs 二进制格式，不是 mihomo 的 .mrs）
@@ -337,8 +337,9 @@ function main(config) {
         { enabled: true }
     );
 
-    // 规则集下载客户端：默认直连 jsDelivr；下不动时把 DOWNLOAD_VIA_DIRECT 改 false，
-    // 下载会走「节点选择」。不要用已废弃的 download_detour。
+    // 规则集下载客户端：默认走「节点选择」；直连 jsDelivr 在国内会被 RST，
+    // 只有确认本机直连可用时才把 DOWNLOAD_VIA_DIRECT 改 true。
+    // 不要用已废弃的 download_detour。
     const clients = Array.isArray(config.http_clients)
         ? config.http_clients.filter(item => !item || item.tag !== HTTP_CLIENT_TAG)
         : [];

@@ -25,6 +25,9 @@ const MANUAL_GROUP = "✋手动选择";
 const DIRECT_GROUP = "🏠直连连接";
 
 const TEST_URL = "https://www.gstatic.com/generate_204";
+const URL_TEST_INTERVAL = "10m";     // 自动选择 / 地区组：测速间隔（省电档）
+const URL_TEST_TOLERANCE = 50;        // 延迟差超过多少 ms 才切换
+const URL_TEST_IDLE_TIMEOUT = "10m";  // 10 分钟没有流量后停止周期测速，下次使用时立即补测
 const REGION_MIN_NODES = 2;        // 同地区至少几个节点才建地区组
 const BLOCK_QUIC = true;           // UDP 443 拒绝（迫使浏览器走 TCP）
 const BLOCK_STUN = true;           // STUN 端口拒绝（WebRTC 防泄漏）
@@ -176,8 +179,9 @@ function main(config) {
             tag: AUTO_GROUP,
             outbounds: nodeTags,
             url: TEST_URL,
-            interval: "5m",
-            tolerance: 50
+            interval: URL_TEST_INTERVAL,
+            tolerance: URL_TEST_TOLERANCE,
+            idle_timeout: URL_TEST_IDLE_TIMEOUT
         });
     }
 
@@ -201,8 +205,9 @@ function main(config) {
             tag: item.label,
             outbounds: item.tags,
             url: TEST_URL,
-            interval: "5m",
-            tolerance: 50
+            interval: URL_TEST_INTERVAL,
+            tolerance: URL_TEST_TOLERANCE,
+            idle_timeout: URL_TEST_IDLE_TIMEOUT
         });
     });
 
